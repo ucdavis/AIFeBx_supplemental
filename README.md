@@ -1,8 +1,8 @@
-#Supplemental data for "Artificial intelligence-based quantification of
+# Supplemental data for "Artificial intelligence-based quantification of
 lymphocytes in feline small intestinal biopsies" 
 (for submission as full manuscript to Veterinary Pathology)
 
-##Objective
+## Objective
 This repository contains scripts for data analysis and manuscript preparation.
 Raw and intermediate data files will be available via bioImageArchive.
 
@@ -30,14 +30,14 @@ structure (to avoid running computationally intense portions).
 and the lymphocyte object detection model to generate intraepithelial and lamina
 propria lymphocyte predictions)
 - randomROI (generates random validation regions for test set)
-- wsi_assesment (parses wsi quality and origin data, figure 3)
+- wsi_assesment (parse WSI quality and origin data, **Figure 3**)
 - lymphocyteValidation (compares AI-generated lymphocyte predictions (output 
 from mergeModels with pathologists annotations and WSI quality 
 (from wsi_assessment), Figures 5-12, Supplemental figures S2-S10)
 - parseWSIgrades (parses pathologists grades)
 - wsiReproducibility (analyse interobserver agreement between pathologists at 
-WSI level (Main figure 13, Supplemental figures S11-13))
+WSI level (Main Figure 13, Supplemental Figures S11-13))
 - wsiAI_vs_Path (compares AI-generated lymphocyte counts (from merge_models) 
-with pathologists grades (from parseWSIgrades), figure 14))
+with pathologists grades (from parseWSIgrades), Figure 14))
 
 - randomizeAuthors (randomizes order of equally contributing coauthors)
