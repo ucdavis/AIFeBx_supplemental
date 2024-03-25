@@ -1,0 +1,213 @@
+---
+title: "parseWSI_grades"
+author: "Wulcan"
+date: "2024-03-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Objective
+Parse WSI grades
+
+##Input
+-  Human semiquantitative grades (one csv spreadsheet per pathologists) (grades documented in google drive and downloaded as csv) </input/humanSemiQuant_grades/>
+
+- Spreadsheet with slideNames for each image name in the pathologists slides </input/name_image/name.xls>
+
+#### Output
+-Parsed semiquantiative grades for intraepithelial lymphocytes <output/wsiAssessment/intraEpithelial_lymphocytes.rds>
+-Parsed semiquantiative grades for lamina propria lymphocytes and plasma cells <output/wsiAssessment/laminaPropria_lymphocytesPlasmacells.rds>
+- Vector of observers <output/wsiAssessment/observers.rds>
+
+```{r load libraries}
+library(tidyverse)
+```
+
+
+### Set batch name and directories
+```{r set batch name and directories}
+batch <- "test_set_AIFeBx_paper"
+
+top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/supplementary_data/" #jmwMacBook
+#top_dir <- "C:/Users/jmwulcan/Box/Projects/AI/paper/supplementary_data/" #jmwDell
+#top_dir <- "C:/Users/15303/Box/Projects/paper/supplementary_data/" #JMW lenovo
+
+inputDir_sQuant <- paste0(top_dir,batch, "/input/humanSemiQuant_grades/")
+
+inputDir_AIquant <- paste0(top_dir,batch,"/output/mergeModels/all/slideSummary_2024-03-06.rds")
+
+#Slide names directory
+slide_names_dir <- paste0(top_dir, batch, "/input/name_image/names.xls")
+
+#Set output directory 
+outputDir_parse <-paste0(top_dir, batch,"/output/wsiGrades_parsed/" )
+```
+
+### Parse pathologists semiquantitative grade
+Reads in csv files, quality checks, parses and merges
+#### Input
+-  Human semiquantitative grades (one csv spreadsheet per pathologists) (grades documented in google drive and downloaded as csv) </input/humanSemiQuant_grades/>
+- Spreadsheet with slideNames for each image name in the pathologists slides </input/name_image/name.xls>
+#### Output
+-Parsed semiquantiative grades for intraepithelial lymphocytes <output/wsiAssessment/intraEpithelial_lymphocytes.rds>
+-Parsed semiquantiative grades for lamina propria lymphocytes and plasma cells <output/wsiAssessment/laminaPropria_lymphocytesPlasmacells.rds>
+- Vector of observers <output/wsiAssessment/observers.rds>
+
+```{r parse semiQuantitative data}
+
+#generate a list of file_paths for csv files in the directory
+filePaths_sQuant <- list.files(path = inputDir_sQuant, pattern = "*csv", full.names = TRUE)
+
+#generate a vector of grader initials
+
+graderInitials <- character(0)
+fileName <- character(0)
+nameParts <- character(0)
+graderInitial <- character(0)
+
+for (filePath in filePaths_sQuant) {
+  fileName <- basename(filePath)
+  nameParts <- strsplit(fileName, "_")[[1]] #separate the elements of the  file path
+  graderInitial <- nameParts[3] #the 3rd element is the grader intials
+  graderInitial <- gsub(".csv","",graderInitial) #remove .csv from intial
+ 
+  if (!(graderInitial %in% graderInitials)) {
+    graderInitials <- c(graderInitials,graderInitial) #generate vector of initials
+  }
+}
+
+#initate empty list of rawGrades with names from graderInitials
+rawGrades <- vector("list", length = length(graderInitials))
+names(rawGrades) <- graderInitials
+
+
+fileName <- character(0)
+nameParts <- character(0)
+graderInitial <- character(0)
+rawGrade<- NULL
+
+#iterate through filePaths and read in rawGrades for each grader
+for (initial in graderInitials){
+  for (filePath in filePaths_sQuant){
+    fileName <- basename(filePath)
+    nameParts <- strsplit(fileName, "_")[[1]] #separate the elements of the  file path
+    graderInitial <- nameParts[3] #the 3rd element is the grader intials
+    graderInitial <- gsub(".csv","",graderInitial)
+    
+    if(graderInitial == initial) {
+      rawGrade <- read.csv(filePath)
+    }
+    rawGrades[[initial]] <- rawGrade
+  }
+}
+
+#Quality checks
+
+#Checks if all dataframes adhere to the required structire (105 observations, contains the correct columns and only contains integers between 0 and 3 in numerical columns)
+
+#Check quality criteria for all dataframes in rawGrade
+checkedGrades <- vector("list", length = length(graderInitials))
+names(checkedGrades) <- graderInitials
+checkedGrade <- NULL
+checkedGrade_selected <- NULL
+
+for (i in seq_along(rawGrades)){
+  checkedGrade <- rawGrades[[i]]
+  
+  #Check if the dataframe has 105 observations
+  if(nrow(checkedGrade) != 105) {
+    stop(sprintf("Dataframe %d: Should have 105 observations.", i))
+  }
+  
+  #Check if the dataframe has the correct variables
+  required_vars <- c("slide", "lamina_propria_lymphocytes_and_plasmacells", "intraepithelial_lymphocytes")
+  
+  if (!all(required_vars %in% colnames(checkedGrade))) {
+    stop(sprintf("Dataframe %d: should have variables %s.", i, paste(required_vars, collapse = ", ")))
+  }
+  
+  checkedGrade_selected <- checkedGrade %>%
+    select(slide, lamina_propria_lymphocytes_and_plasmacells, intraepithelial_lymphocytes)
+  
+  #Check if the numerical columns are integers between 0 and 3 - if not - round them to the closest (if right in between randomly round up or down)
+  
+  num_cols <- c("lamina_propria_lymphocytes_and_plasmacells", "intraepithelial_lymphocytes")
+  
+  if(!all(sapply(checkedGrade_selected[, num_cols], function(x) all(x %in% 0:3) && all(x %% 1 == 0)))) {
+    stop(sprintf("Dataframe %d: The numerical columns should contain integers between 0 and 3.", i))
+  }
+  
+  print("All checks passed.")
+  
+  checkedGrades[[i]] <- checkedGrade_selected
+}
+
+#Add prefix and merge
+
+# rename numerical columns p01 to p10 in anticipation of merging
+
+#Function to rename columns and add p01 to p10
+rename_and_add_prefix <- function(df, prefix) {
+  names(df)[names(df) !=  "slide"] <- paste0(prefix, names(df)[names(df) != "slide"])
+  return(df)
+
+}
+
+#Loop through the list of dataframes to rename columns
+#observers<- paste0("p",sprintf("%02d",1:length(graderInitials)))
+
+observers <- c("p02", "p05", "p03", "p06", "p11", "p04", "p10", "p09","p08", "p01", "p07") #To match assignments for lc_level validation
+
+rnGrades <- lapply(seq_along(checkedGrades), function(i){
+  rename_and_add_prefix(checkedGrades[[i]], paste0(observers[i],"_"))
+})
+
+#Sort after pathologist name
+roGrades <- NULL
+roGrades[["p01"]] <- rnGrades[[10]]
+roGrades[["p02"]] <- rnGrades[[1]]
+roGrades[["p03"]] <- rnGrades[[3]]
+roGrades[["p04"]] <- rnGrades[[6]]
+roGrades[["p05"]] <- rnGrades[[2]]
+roGrades[["p06"]] <- rnGrades[[4]]
+roGrades[["p07"]] <- rnGrades[[11]]
+roGrades[["p08"]] <- rnGrades[[9]]
+roGrades[["p09"]] <- rnGrades[[8]]
+roGrades[["p10"]] <- rnGrades[[7]]
+roGrades[["p11"]] <- rnGrades[[5]]
+
+
+#Merge dataframes from each grader
+allGrades <- Reduce(function(x, y) merge(x,y, by="slide", all=TRUE), roGrades)
+
+#Add slide names
+slide_names <- read_excel(slide_names_dir)
+allGrades <- merge(slide_names, allGrades, by= "slide") 
+
+#Separate IE and LP tables
+
+#Separate up intraepithelial and lamina propria grades in different dataframes
+
+lp_lcPc <- allGrades %>%
+  select(slide_name, matches("_lamina_propria_lymphocytes_and_plasmacells")) 
+
+ie_lc <- allGrades %>%
+  select(slide_name, matches("_intraepithelial_lymphocytes"))
+
+names(ie_lc) <- gsub("_intraepithelial_lymphocytes","",names(ie_lc))
+names(lp_lcPc) <- gsub("_lamina_propria_lymphocytes_and_plasmacells", "", names(lp_lcPc))
+
+
+  
+#Save rds 
+saveRDS(ie_lc, paste0(outputDir_sQuant,"WSI_grades_median_intraepithelial.rds"))
+saveRDS(lp_lcPc, paste0(outputDir_sQuant,"WSI_grades_median_laminaPropria.rds"))
+
+#Save rds 
+saveRDS(ie_lc, paste0(outputDir_parse,"intraEpithelial_lymphocytes.rds"))
+saveRDS(lp_lcPc, paste0(outputDir_parse,"laminaPropria_lymphocytesPlasmacells.rds"))
+saveRDS(observers, paste0(outputDir_parse,"observers.rds"))
+```

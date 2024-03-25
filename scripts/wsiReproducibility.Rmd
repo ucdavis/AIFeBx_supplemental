@@ -1,0 +1,863 @@
+---
+title: "wsiReproducibility"
+author: "Wulcan"
+date: "2024-03-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Objective
+Calculate interobserver agreement for pathologists semiquantative grades of test set wsis.
+
+##Input
+-Parsed semiquantiative grades for intraepithelial lymphocytes <output/wsiAssessment/intraEpithelial_lymphocytes.rds>
+-Parsed semiquantiative grades for lamina propria lymphocytes and plasma cells <output/wsiAssessment/laminaPropria_lymphocytesPlasmacells.rds>
+- Vector of observers <output/wsiAssessment/observers.rds>
+
+##Output
+- **Figure 13 a-b** Upset plots <figures/main/13a_upsetIE.tif><figures/main/13b_upsetLP.tif>
+
+```{r load libraries}
+library(tidyverse)
+options(scipen = 999) #turn of scientific notation
+library(vcd) # for kappa calculations
+library(pheatmap)
+library(writexl)
+library(UpSetR)
+library(RColorBrewer)
+```
+
+#Set batch names and directories
+```{r set batch names and directories}
+batch <- "test_set_AIFeBx_paper"
+
+top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/supplementary_data/" #jmwMacBook
+#top_dir <- "C:/Users/jmwulcan/Box/Projects/AI/paper/supplementary_data/" #jmwDell
+#top_dir <- "C:/Users/15303/Box/Projects/paper/supplementary_data/" #JMW lenovo
+
+# Set input directory grading files
+inputDir <-paste0(top_dir, batch,"/output/wsiGrades_parsed/")
+
+#Set output directory 
+outputDir_repro <-paste0(top_dir, batch,"/output/wsiReproducibility/")
+supplementaryFigures_dir <- paste0(top_dir,batch,"/figures/supplementary/")
+mainFigures_dir <- paste0(top_dir,batch,"/figures/main/")  
+tables_dir <- paste0(top_dir,batch,"/tables//")  
+
+classLabel_palette <- c("Intraepithelial lymphocytes" = "#FA8533","Lamina propria lymphocytes and plasma cells" =  "#3282Bd")
+```
+
+
+### Upset plots
+####Input
+-Parsed semiquantiative grades for intraepithelial lymphocytes <output/wsiAssessment/intraEpithelial_lymphocytes.rds>
+-Parsed semiquantiative grades for lamina propria lymphocytes and plasma cells <output/wsiAssessment/laminaPropria_lymphocytesPlasmacells.rds>
+- Vector of observers <output/wsiAssessment/observers.rds>
+####Output
+- **Figure 13 a-b** Upset plots
+<figures/main/13a_upsetIE.tif><figures/main/13b_upsetLP.tif>
+```{r}
+#load data 
+ie_lc <- readRDS(paste0(inputDir,"intraEpithelial_lymphocytes.rds"))
+lp_lcPc <-readRDS(paste0(inputDir,"laminaPropria_lymphocytesPlasmacells.rds"))
+observers <- readRDS(paste0(inputDir,"observers.rds"))
+
+
+ie_upset <- ie_lc %>%
+  rowwise() %>%
+  mutate(
+    Marked = sum(c_across(all_of(observers)) == 3) > 0,
+    Moderate = sum(c_across(all_of(observers)) == 2) > 0,
+    Mild = sum(c_across(all_of(observers)) == 1) > 0,
+    Normal = sum(c_across(all_of(observers)) == 0) > 0
+  ) %>%
+  select(slide_name, Marked, Moderate, Mild, Normal)
+
+
+
+
+lp_upset <- lp_lcPc %>%
+  rowwise() %>%
+  mutate(
+    Marked = sum(c_across(all_of(observers)) == 3) > 0,
+    Moderate = sum(c_across(all_of(observers)) == 2) > 0,
+    Mild = sum(c_across(all_of(observers)) == 1) > 0,
+    Normal = sum(c_across(all_of(observers)) == 0) > 0
+  ) %>%
+  select(slide_name, Marked, Moderate, Mild, Normal)
+
+
+
+upset_ie <- ie_upset[, c("Marked", "Moderate", "Mild", "Normal")]
+
+upset_ie <- as.data.frame(sapply(upset_ie, as.numeric))
+
+rownames(upset_ie) <- ie_upset$slide_name
+
+ie_upset_plot <- upset(upset_ie, 
+                       keep.order = T, 
+                       sets = c("Marked", "Moderate", "Mild", "Normal"),
+                       main.bar.color = "#FA8533", 
+                       sets.bar.color = "#FA8533", c(1.5, 0.9, 0.9, 0.9, 0.9, 0.9))
+
+par(family = "Arial", cex = 0.9)
+
+print(ie_upset_plot)
+
+output_file_tif <- paste0(mainFigures_dir,"F13a_upsetIE.tif")
+tiff(output_file_tif, width = 3.5, height = 3.5, units = "in", res = 300)
+print(ie_upset_plot)
+dev.off()
+
+
+
+upset_lp <- lp_upset[, c("Marked", "Moderate", "Mild", "Normal")]
+
+upset_lp <- as.data.frame(sapply(upset_lp, as.numeric))
+
+rownames(upset_lp) <- lp_upset$slide_name
+
+sets_order <- c("Marked", "Moderate", "Mild", "Normal")
+
+lp_upset_plot <- upset(upset_lp, keep.order = T, sets = c("Marked", "Moderate", "Mild", "Normal"), main.bar.color = "#3282Bd", sets.bar.color = "#3282Bd", text.scale = c(0.9, 0.9, 0.9, 0.9, 0.9, 0.9))
+
+par(family = "Arial", cex = 0.9)
+ print(lp_upset_plot)
+
+output_file_tif <- paste0(mainFigures_dir,"F13b_upsetLP.tif")
+tiff(output_file_tif, width = 3.5, height = 3.5, units = "in", res = 300)
+print(lp_upset_plot)
+dev.off()
+
+```
+
+
+### Interobserver agreement
+Generate contigency tables, calculate agreement metrics per pathologist pair, plot agreement per pathologist pair, summarize average metrics across pairs. 
+##Input
+-Parsed semiquantiative grades for intraepithelial lymphocytes <output/wsiAssessment/intraEpithelial_lymphocytes.rds>
+-Parsed semiquantiative grades for lamina propria lymphocytes and plasma cells <output/wsiAssessment/laminaPropria_lymphocytesPlasmacells.rds>
+- Vector of observers <output/wsiAssessment/observers.rds>
+
+####Output
+-Agreement per pathologist pair for intraepithelial lymphocytes as rds   < output/wsiReproducibility/ie_agreementByPair.rds> and excel <tables/ie_agreementByPair.xlsx> 
+-Agreement per pathologist pair for lamina propria lymphocytes as rds and excel <tables/lp_agreementByPair.xlsx> 
+< output/wsiReproducibility/lp_agreementByPair.rds> 
+-**Supplementary figure 11 a and b ** Weighted agreemenet and kappa per pathologist pair <figures/supplementary/S11a_weightedKappa_perPair.tif/>, <figures/supplementary/S11b_cohensKappa_perPair.tif/>,
+-Average agreement across pathologist pairs intraepithelial <output/wsiReproducibility/ie_agreementAverage.rds> 
+-Average agreement across pathologist pairs lamina propria <output/wsiReproducibility/lp_agreementAverage.rds> 
+```{r generate contingency tables}
+
+#load data 
+ie_lc <- readRDS(paste0(inputDir,"intraEpithelial_lymphocytes.rds"))
+lp_lcPc <-readRDS(paste0(inputDir,"laminaPropria_lymphocytesPlasmacells.rds"))
+observers <- readRDS(paste0(inputDir,"observers.rds"))
+
+
+
+#Generate contingency tables for each observer pair
+
+ie_contingencyTables <- list()
+
+
+observer1 <- character(0)
+observer2 <- character(0)
+
+ie_contingency_table <- NULL
+
+for (i in 1:(length(observers) - 1)) {
+  for (j in (i +1): length(observers)) {
+    observer1 <- observers[i]
+    observer2 <- observers[j]
+    
+    #Create a contingency table for observer 1 vs. observer 2
+    ie_contingency_table <- xtabs(~ factor(ie_lc[[observer1]], levels = 0:3) + factor(ie_lc[[observer2]], levels = 0:3))
+    
+    #Store the contingency table in a list
+    ie_contingencyTables[[paste0(observer1,"_vs_",observer2)]] <- ie_contingency_table
+  }
+}
+
+
+#For lamina propria
+lp_contingencyTables <- list()
+
+
+observer1 <- character(0)
+observer2 <- character(0)
+
+lp_contingency_table <- NULL
+
+for (i in 1:(length(observers) - 1)) {
+  for (j in (i +1): length(observers)) {
+    observer1 <- observers[i]
+    observer2 <- observers[j]
+    
+    #Create a contingency table for observer 1 vs. observer 2
+    lp_contingency_table <- xtabs(~ factor(lp_lcPc[[observer1]], levels = 0:3) + factor(lp_lcPc[[observer2]], levels = 0:3))
+    
+    #Store the contingency table in a list
+    lp_contingencyTables[[paste0(observer1,"_vs_",observer2)]] <- lp_contingency_table
+  }
+}
+
+
+#Generate vector of observer pairs 
+observer_pairs <- names(ie_contingencyTables)
+
+
+
+#For each pathologist pair, create a table of summary stats (with kappa and CIs)
+
+
+#Intraepithelial lymphocytes
+
+ie_summaryTables <- list()
+contingency_table <- NULL
+total_n = NULL
+observed_agreement = NULL
+K = NULL
+CI_K = NULL
+summary_table = NULL
+
+for (observer_pair in observer_pairs){
+  contingency_table <- ie_contingencyTables[[observer_pair]]
+  
+  # Calculate total observations
+  total_n <- sum(contingency_table)
+  
+  # Calculate observed agreement
+  observed_agreement <- sum(diag(contingency_table)) / total_n
+  
+  # Calculate cohens kappa & weighted kappa (linear weights) with SE
+  K <- Kappa(contingency_table, weight = c("Equal-Spacing", "Fleiss-Cohen"))
+  CI_K <- confint(K)
+  
+  #Create a summary table
+  summary_table <- data.frame(
+    total_n = total_n,
+    observed_agreement = observed_agreement,
+    cohens_kappa = K$Unweighted[1],
+    cohens_kappa_SE = K$Unweighted[2],
+    cohens_kappa_MoE = (CI_K[3]-CI_K[1])/2,
+    cohens_kappa_CI_lwr = CI_K[1],
+    cohens_kappa_CI_upr = CI_K[3],
+    cohens_kappa_sd = K$Unweighted[2] * sqrt(total_n),
+    weighted_kappa = K$Weighted[1],
+    weighted_kappa_SE = K$Weighted[2],
+    weighted_kappa_MoE = (CI_K[4]-CI_K[2])/2,
+    weighted_kappa_CI_lwr = CI_K[2],
+    weighted_kappa_CI_upr = CI_K[4],
+    weighted_kappa_sd = K$Weighted[2] * sqrt(total_n)
+    
+   
+  
+  )
+  
+  ie_summaryTables[[observer_pair]] <- summary_table
+}
+
+# Collect in one dataframe
+ie_pathPairs <- lapply(seq_along(ie_summaryTables), function(i) {
+  path_pair <- paste0(names(ie_summaryTables)[i])
+  ie_PathPair <- as.data.frame(ie_summaryTables[[i]])
+  ie_PathPair$path_pair <- path_pair
+  return(ie_PathPair)
+})
+
+ie_summary_frame <- bind_rows(ie_pathPairs)
+
+ie_summary_frame <- ie_summary_frame %>%
+  select(path_pair, everything())
+
+
+#For lamina propria
+
+lp_summaryTables <- list()
+contingency_table <- NULL
+total_n = NULL
+observed_agreement = NULL
+K = NULL
+CI_K = NULL
+summary_table = NULL
+
+for (observer_pair in observer_pairs){
+  contingency_table <- lp_contingencyTables[[observer_pair]]
+  
+  # Calculate total observations
+  total_n <- sum(contingency_table)
+  
+  # Calculate observed agreement
+  observed_agreement <- sum(diag(contingency_table)) / total_n
+  
+  # Calculate cohens kappa & weighted kappa (linear weights) with SE
+  K <- Kappa(contingency_table, weight = c("Equal-Spacing", "Fleiss-Cohen"))
+  CI_K <- confint(K)
+  
+  #Create a summary table
+  summary_table <- data.frame(
+    total_n = total_n,
+    observed_agreement = observed_agreement,
+    cohens_kappa = K$Unweighted[1],
+    cohens_kappa_SE = K$Unweighted[2],
+    cohens_kappa_MoE = (CI_K[3]-CI_K[1])/2,
+    cohens_kappa_CI_lwr = CI_K[1],
+    cohens_kappa_CI_upr = CI_K[3],
+    cohens_kappa_sd = K$Unweighted[2] * sqrt(total_n),
+    weighted_kappa = K$Weighted[1],
+    weighted_kappa_SE = K$Weighted[2],
+    weighted_kappa_MoE = (CI_K[4]-CI_K[2])/2,
+    weighted_kappa_CI_lwr = CI_K[2],
+    weighted_kappa_CI_upr = CI_K[4],
+    weighted_kappa_sd = K$Weighted[2] * sqrt(total_n)
+    
+   
+  
+  )
+  
+  lp_summaryTables[[observer_pair]] <- summary_table
+}
+
+
+lp_pathPairs <- lapply(seq_along(lp_summaryTables), function(i) {
+  path_pair <- paste0(names(lp_summaryTables)[i])
+  lp_PathPair <- as.data.frame(lp_summaryTables[[i]])
+  lp_PathPair$path_pair <- path_pair
+  return(lp_PathPair)
+})
+
+lp_summary_frame <- bind_rows(lp_pathPairs)
+
+lp_summary_frame <- lp_summary_frame %>%
+  select(path_pair, everything())
+
+#Add weighted observed agreement
+
+divide_by_total_n <- function(table) {
+  total_n <- sum(table)
+  return(table/total_n)
+}
+
+proportion_tables = list()
+
+for (name in names(ie_contingencyTables)){
+  table <- ie_contingencyTables[[name]]
+  proportion_table <- divide_by_total_n(table)
+  proportion_tables[[name]] <- proportion_table
+}
+
+#define weights matrix
+weights_matrix <- matrix(c (1, 2/3, 1/3, 0,
+                         2/3, 1, 2/3, 1/3,
+                         1/3, 2/3, 1, 2/3,
+                         0, 1/3, 2/3, 1), nrow = 4, byrow = FALSE)
+weighted_tables <- list()
+
+for (name in names(proportion_tables)) {
+  table <- proportion_tables[[name]]
+  weighted_table <- table * weights_matrix
+  weighted_tables[[name]] <- weighted_table
+}
+
+
+# Save the weigthed observed agreement in a list
+w_oa_pairs <- data.frame(path_pair = character(0), weighted_observed_agreement = numeric(0))
+
+#Iterate through weighted tables
+for (name in names(weighted_tables)) {
+  table <- weighted_tables[[name]]
+  sum_of_table <- sum(table)
+  
+  w_oa_pairs <- rbind(w_oa_pairs, data.frame(path_pair = name, weighted_observed_agreement = sum_of_table))
+}
+
+ie_summary_frame <- merge(ie_summary_frame, w_oa_pairs, by = "path_pair") %>%
+  select(path_pair, total_n, observed_agreement, weighted_observed_agreement, cohens_kappa :weighted_kappa_sd)
+
+
+#Lamina propria
+
+#Add weighted observed agreement
+
+
+proportion_tables = list()
+
+for (name in names(lp_contingencyTables)){
+  table <- lp_contingencyTables[[name]]
+  proportion_table <- divide_by_total_n(table)
+  proportion_tables[[name]] <- proportion_table
+}
+
+#define weights matrix
+weights_matrix <- matrix(c (1, 2/3, 1/3, 0,
+                         2/3, 1, 2/3, 1/3,
+                         1/3, 2/3, 1, 2/3,
+                         0, 1/3, 2/3, 1), nrow = 4, byrow = FALSE)
+weighted_tables <- list()
+
+for (name in names(proportion_tables)) {
+  table <- proportion_tables[[name]]
+  weighted_table <- table * weights_matrix
+  weighted_tables[[name]] <- weighted_table
+}
+
+
+# Save the weigthed observed agreement in a list
+w_oa_pairs <- data.frame(path_pair = character(0), weighted_observed_agreement = numeric(0))
+
+#Iterate through weighted tables
+for (name in names(weighted_tables)) {
+  table <- weighted_tables[[name]]
+  sum_of_table <- sum(table)
+  
+  w_oa_pairs <- rbind(w_oa_pairs, data.frame(path_pair = name, weighted_observed_agreement = sum_of_table))
+}
+
+lp_summary_frame <- merge(lp_summary_frame, w_oa_pairs, by = "path_pair") %>%
+  select(path_pair, total_n, observed_agreement, weighted_observed_agreement, cohens_kappa :weighted_kappa_sd)
+
+
+saveRDS(ie_summary_frame, paste0(outputDir_repro,"ie_agreementByPair.rds"))
+saveRDS(lp_summary_frame, paste0(outputDir_repro,"lp_agreementByPair.rds"))
+
+write_xlsx(ie_summary_frame, paste0(tables_dir,"ie_agreementByPair.xlsx"))
+write_xlsx(lp_summary_frame, paste0(tables_dir,"lp_agreementByPair.xlsx"))
+
+#Explore distributions for kappas per pair (can I average)
+ie_short <- ie_summary_frame %>% 
+  mutate(classLabel = "Intraepithelial lymphocytes") %>%
+  select(path_pair, classLabel, cohens_kappa, cohens_kappa_CI_lwr, cohens_kappa_CI_upr, weighted_kappa, weighted_kappa_CI_lwr, weighted_kappa_CI_upr) 
+
+lp_short <- lp_summary_frame %>% 
+   mutate(classLabel = "Lamina propria lymphocytes and plasma cells") %>%
+  select(path_pair, classLabel, cohens_kappa, cohens_kappa_CI_lwr, cohens_kappa_CI_upr, weighted_kappa, weighted_kappa_CI_lwr, weighted_kappa_CI_upr) 
+
+kappas <- rbind(ie_short, lp_short)
+
+rounded_kappas <- kappas %>%
+   mutate(across(where(is.numeric), ~round(., 2)))
+
+# Plot weighted kappas per pathologist pair
+plot <- ggplot(rounded_kappas, aes(x = path_pair, y = weighted_kappa, color = classLabel)) +
+  geom_point() +
+  geom_errorbar(
+    aes(ymin = weighted_kappa_CI_lwr, ymax = weighted_kappa_CI_upr),
+    width = 0.2,  # Adjust the width of the error bars
+    position = position_dodge(0.2)  # Adjust the position of the error bars
+  ) +
+  labs(x = "Pathologist pair", y = "Weighted kappa") +
+  coord_cartesian(ylim = c(-1, 1)) +
+  theme_bw() +
+  theme(legend.position = "none", 
+        axis.text = element_text(size = 11, family = "Arial"),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  facet_wrap(~ classLabel, scales = "free_y", ncol = 1) +
+  scale_fill_manual(values = classLabel_palette) 
+  
+print(plot)
+
+# Save the plot as a tif file
+output_file_tif <- paste0(supplementaryFigures_dir,"S11a_weightedKappa_perPair.tif")
+tiff(output_file_tif, width = 7, height = 3.5, units = "in", res = 300)
+print(plot)
+dev.off()
+
+
+#Plot cohens kappa per pathologist pair
+plot <- ggplot(rounded_kappas, aes(x = path_pair, y = cohens_kappa, color = classLabel)) +
+  geom_point() +
+  geom_errorbar(
+    aes(ymin = cohens_kappa_CI_lwr, ymax = cohens_kappa_CI_upr),
+    width = 0.2,  # Adjust the width of the error bars
+    position = position_dodge(0.2)  # Adjust the position of the error bars
+  ) +
+  labs(x = "Pathologist pair", y = "Cohens kappa") +
+  coord_cartesian(ylim = c(-1, 1)) +
+  theme_bw() +
+  theme(legend.position = "none", 
+        axis.text = element_text(size = 11, family = "Arial"),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  facet_wrap(~ classLabel, scales = "free_y", ncol = 1) +
+  scale_fill_manual(values = classLabel_palette) 
+  
+print(plot)
+
+# Save the plot as a tif file
+output_file_tif <- paste0(supplementaryFigures_dir,"S11b_cohensKappa_perPair.tif")
+tiff(output_file_tif, width = 7, height = 3.5, units = "in", res = 300)
+print(plot)
+dev.off()
+
+
+
+#Explore distributions of kappa values per pair
+ggplot(rounded_kappas, aes(x = cohens_kappa)) +
+  geom_histogram(binwidth = 0.1, fill = "skyblue", color = "black", alpha = 0.7) +
+  labs(title = "Histogram of Cohen's Kappa", x = "Cohen's Kappa", y = "Frequency")
+
+ggplot(rounded_kappas, aes(x = weighted_kappa)) +
+  geom_histogram(binwidth = 0.1, fill = "skyblue", color = "black", alpha = 0.7) +
+  labs(title = "Histogram of Cohen's Kappa", x = "Cohen's Kappa", y = "Frequency")
+
+#Generate summary statistic frame by averaging pair values
+
+# Generate summary statistics for the pathologist pair data
+ie_WSIagree_summaryStats <- ie_summary_frame %>%
+  summarise(
+    n_pathPairs = n(),
+    avg_obs_agree = mean(observed_agreement),
+    sd_avg_obs_agree = sd(observed_agreement),
+    avg_weighted_agree = mean(weighted_observed_agreement),
+    sd_avg_weighted_agree = sd(weighted_observed_agreement),
+    avg_cohens_kappa = mean(cohens_kappa),
+    sd_avg_cohens_kappa = sd(cohens_kappa),
+    avg_cohens_kappa_MoE = mean(cohens_kappa_MoE),
+    sd_avg_cohens_kappa_MoE = sd(cohens_kappa_MoE),
+    avg_weighted_kappa = mean(weighted_kappa),
+    sd_avg_weighted_kappa = sd(weighted_kappa),
+    avg_weighted_kappa_SE = mean(weighted_kappa_SE),
+    sd_weighted_kappa_SE = sd(weighted_kappa_SE),
+    avg_weighted_kappa_MoE = mean(weighted_kappa_MoE),
+    sd_avg_weighted_kappa_MoE = sd(weighted_kappa_MoE))
+
+
+# Generate summary statistics for the pathologist pair data
+lp_WSIagree_summaryStats <- lp_summary_frame %>%
+  summarise(
+    n_pathPairs = n(),
+    avg_obs_agree = mean(observed_agreement),
+    sd_avg_obs_agree = sd(observed_agreement),
+    avg_weighted_agree = mean(weighted_observed_agreement),
+    sd_avg_weighted_agree = sd(weighted_observed_agreement),
+    avg_cohens_kappa = mean(cohens_kappa),
+    sd_avg_cohens_kappa = sd(cohens_kappa),
+    avg_cohens_kappa_MoE = mean(cohens_kappa_MoE),
+    sd_avg_cohens_kappa_MoE = sd(cohens_kappa_MoE),
+    avg_weighted_kappa = mean(weighted_kappa),
+    sd_avg_weighted_kappa = sd(weighted_kappa),
+    avg_weighted_kappa_SE = mean(weighted_kappa_SE),
+    sd_weighted_kappa_SE = sd(weighted_kappa_SE),
+    avg_weighted_kappa_MoE = mean(weighted_kappa_MoE),
+    sd_avg_weighted_kappa_MoE = sd(weighted_kappa_MoE))
+
+
+saveRDS(ie_WSIagree_summaryStats, paste0(outputDir_repro,"ie_agreementAverage.rds"))
+saveRDS(lp_summary_frame, paste0(outputDir_repro,"lp_agreementAverage.rds"))
+
+```
+
+
+### Visualize raw semiquantiative grades
+Generates heatmaps of raw semiquantitativ grades
+##Input
+-Parsed semiquantiative grades for intraepithelial lymphocytes <output/wsiAssessment/intraEpithelial_lymphocytes.rds>
+-Parsed semiquantiative grades for lamina propria lymphocytes and plasma cells <output/wsiAssessment/laminaPropria_lymphocytesPlasmacells.rds>
+#### Output
+-**Supplemental Figure S12a-b** Heatmap of raw grades intraepithelial <figures/supplementary/S12a_rawIeGrades.tif/>, <figures/supplementary/S12b_rawLpGrades.tif/>
+
+```{r}
+#load data 
+ie_lc <- readRDS(paste0(inputDir,"intraEpithelial_lymphocytes.rds"))
+
+lp_lcPc <-readRDS(paste0(inputDir,"laminaPropria_lymphocytesPlasmacells.rds"))
+
+### Heatmamp of raw semiquantative grades intraepithelial
+heatmap_data <- ie_lc 
+
+
+# Set row and column names
+rownames(heatmap_data) <- heatmap_data$slide_name
+
+# Remove the 'slide_name' column
+heatmap_data <- select(heatmap_data, -slide_name)
+
+heatmap_matrix <- data.matrix(heatmap_data)
+
+colnames(heatmap_data) <- colnames(ie_lc)[-1]
+
+# Check for missing or infinite values
+if (any(is.na(heatmap_matrix)) || any(!is.finite(heatmap_matrix))) {
+  stop("Data contains missing or infinite values.")
+}
+
+# Check data types
+if (any(sapply(heatmap_matrix, function(x) !is.numeric(x)))) {
+  stop("Data contains non-numeric values.")
+}
+
+# Check data types in 'p01' to 'p11'
+if (any(sapply(ie_lc %>% select(p01:p11), function(x) !is.numeric(x)))) {
+  stop("Columns 'p01' to 'p11' contain non-numeric values.")
+}
+
+# Generate the heatmap
+heatmap_grades <- pheatmap(heatmap_matrix, cluster_rows = TRUE, cluster_cols = TRUE, legend_breaks = seq(0, 3, by = 1),  fontsize = 7)
+
+print(heatmap_grades)
+
+# Save the plot as a tif file
+output_file_tif <- paste0(supplementaryFigures_dir,"S12a_rawIeGrades.tif")
+tiff(output_file_tif, width = 3.5, height = 7, units = "in", res = 300)
+print(heatmap_grades)
+dev.off()
+
+#Heatmap raw lamina propria grades
+heatmap_data <- lp_lcPc
+
+
+# Set row and column names
+rownames(heatmap_data) <- heatmap_data$slide_name
+
+# Remove the 'slide_name' column
+heatmap_data <- select(heatmap_data, -slide_name)
+
+heatmap_matrix <- data.matrix(heatmap_data)
+
+colnames(heatmap_data) <- colnames(ie_lc)[-1]
+
+# Check for missing or infinite values
+if (any(is.na(heatmap_matrix)) || any(!is.finite(heatmap_matrix))) {
+  stop("Data contains missing or infinite values.")
+}
+
+# Check data types
+if (any(sapply(heatmap_matrix, function(x) !is.numeric(x)))) {
+  stop("Data contains non-numeric values.")
+}
+
+# Check data types in 'p01' to 'p11'
+if (any(sapply(ie_lc %>% select(p01:p11), function(x) !is.numeric(x)))) {
+  stop("Columns 'p01' to 'p11' contain non-numeric values.")
+}
+
+# Generate the heatmap
+heatmap_grades <- pheatmap(heatmap_matrix, cluster_rows = TRUE, cluster_cols = TRUE, legend_breaks = seq(0, 3, by = 1),  fontsize = 7)
+
+# Save the plot as a tif file
+output_file_tif <- paste0(supplementaryFigures_dir,"S12b_rawlpGrades.tif")
+tiff(output_file_tif, width = 3.5, height = 7, units = "in", res = 300)
+print(heatmap_grades)
+dev.off()
+
+```
+
+### Agreement by slide
+Calculate observed weighted and unweighted agreement per slide
+####Input
+-Parsed semiquantiative grades for intraepithelial lymphocytes <output/wsiAssessment/intraEpithelial_lymphocytes.rds>
+-Parsed semiquantiative grades for lamina propria lymphocytes and plasma cells <output/wsiAssessment/laminaPropria_lymphocytesPlasmacells.rds>
+#### Output
+-**Supplemental Figure S13** Heatmap of observed agreement  <figures/supplementary/S13_agreementBySlide>
+
+```{r add agreement by slide}
+#load data 
+ie_lc <- readRDS(paste0(inputDir,"intraEpithelial_lymphocytes.rds"))
+lp_lcPc <-readRDS(paste0(inputDir,"laminaPropria_lymphocytesPlasmacells.rds"))
+observers <- readRDS(paste0(inputDir,"observers.rds"))
+
+ie_lc <- ie_lc %>%
+  mutate(class_label = "Intraepithelial lymphocytes")
+
+lp_lcPc  <- lp_lcPc %>%
+  mutate(class_label = "Lamina propria lymphocytes and plasmacells")
+
+
+WSI_agreementBySlide <- rbind(ie_lc, lp_lcPc) %>%
+  select(slide_name, class_label, p01:p11 )
+
+
+WSI_agreementBySlide$observed_agreement <- NA
+WSI_agreementBySlide$weighted_observed_agreement <- NA
+
+for (k in 1:nrow(WSI_agreementBySlide)){
+  
+  contingencyTables <- list()
+  observer1 <- character(0)
+  observer2 <- character(0)
+  contingency_table <- NULL
+  
+  #Generate contingency tables for each observer pair
+  for (i in 1:(length(observers) - 1)) {
+    for (j in (i +1): length(observers)) {
+      observer1 <- observers[i]
+      observer2 <- observers[j]
+      
+      #Create a contingency table for observer 1 vs. observer 2
+      
+      contingency_table <- xtabs(~ factor(WSI_agreementBySlide[[k, observer1]], levels = 0:3) + factor(WSI_agreementBySlide[[k, observer2]], levels = 0:3))
+      
+      #Store the contingency table in a list
+    
+      contingencyTables[[paste0(observer1,"_vs_",observer2)]] <- contingency_table
+    }
+  }
+  
+  #Generate vector of observer pairs 
+
+  observer_pairs <- names(contingencyTables)
+  
+  #For each pathologist pair, create a table of summary stats 
+  
+  #Intraepithelial lymphocytes
+  
+  summaryTables <- list()
+  contingency_table <- NULL
+  total_n = NULL
+  observed_agreement = NULL
+  summary_table = NULL
+  
+  for (observer_pair in observer_pairs){
+  
+    contingency_table <- contingencyTables[[observer_pair]]
+    
+    # Calculate total observations
+  
+    total_n <- sum(contingency_table)
+    
+    # Calculate observed agreement
+  
+    observed_agreement <- sum(diag(contingency_table)) / total_n
+    
+    #Create a summary table
+  
+    summary_table <- data.frame(
+    
+      total_n = total_n,
+    
+      observed_agreement = observed_agreement)
+    
+    
+    summaryTables[[observer_pair]] <- summary_table
+  }
+  
+   # Collect in one dataframe
+  pathPairs <- lapply(seq_along(summaryTables), function(i) {
+  
+    path_pair <- paste0(names(summaryTables)[i])
+    PathPair <- as.data.frame(summaryTables[[i]])
+    PathPair$path_pair <- path_pair
+    return(PathPair)
+    })
+  
+  summary_frame <- bind_rows(pathPairs)
+  
+  summary_frame <- summary_frame %>%
+  select(path_pair, everything())
+  
+  #Calculate weighted observed agreement
+  divide_by_total_n <- function(table) {
+  total_n <- sum(table)
+  return(table/total_n)
+  }
+  
+  proportion_tables = list()
+  
+  for (name in names(contingencyTables)){
+  table <- contingencyTables[[name]]
+  proportion_table <- divide_by_total_n(table)
+  proportion_tables[[name]] <- proportion_table
+  }
+  
+  #define weights matrix
+  weights_matrix <- matrix(c (1, 2/3, 1/3, 0,
+                         2/3, 1, 2/3, 1/3,
+                         1/3, 2/3, 1, 2/3,
+                         0, 1/3, 2/3, 1), nrow = 4, byrow = FALSE)
+  weighted_tables <- list()
+  
+  for (name in names(proportion_tables)) {
+  
+    table <- proportion_tables[[name]]
+  
+    weighted_table <- table * weights_matrix
+  
+    weighted_tables[[name]] <- weighted_table
+  }
+  
+  # Save the weigthed observed agreement in a list
+
+  w_oa_pairs <- data.frame(path_pair = character(0), weighted_observed_agreement = numeric(0))
+  
+  #Iterate through weighted tables
+
+  for (name in names(weighted_tables)) {
+  
+    table <- weighted_tables[[name]]
+  
+    sum_of_table <- sum(table)
+  
+  
+    w_oa_pairs <- rbind(w_oa_pairs, data.frame(path_pair = name, weighted_observed_agreement = sum_of_table))
+  }
+  summary_frame <- merge(summary_frame, w_oa_pairs, by = "path_pair") %>%
+  select(path_pair, total_n, observed_agreement, weighted_observed_agreement)
+  
+  averageForReference <- summary_frame %>%
+    summarise(observed_agreement = mean(observed_agreement),
+              weighted_observed_agreement = mean(weighted_observed_agreement))
+  
+  #Add observered agreement value to new dataframe
+  WSI_agreementBySlide[k, "observed_agreement"] <- averageForReference$observed_agreement
+  
+  WSI_agreementBySlide[k, "weighted_observed_agreement"] <- averageForReference$weighted_observed_agreement
+  
+}
+    
+
+
+WSI_agreementBySlide$observed_agreement <- round(WSI_agreementBySlide$observed_agreement, 2)
+
+WSI_agreementBySlide$weighted_observed_agreement <-
+  round(WSI_agreementBySlide$weighted_observed_agreement, 2)
+
+#Save rds 
+saveRDS(WSI_agreementBySlide, paste0(outputDir_repro,"WSI_agreementBySlide.rds"))
+saveRDS(summary_frame, paste0(outputDir_repro,"WSI_agreementBySlide_PathPair.rds"))
+
+
+
+#Plot heatmap of observed agreement
+ie_lc <- WSI_agreementBySlide %>%
+  filter(class_label == "Intraepithelial lymphocytes")
+
+lp_lcPc <- WSI_agreementBySlide %>%
+  filter(class_label == "Lamina propria lymphocytes and plasmacells") 
+
+renamed_lp <- lp_lcPc %>%
+  select(slide_name, observed_agreement, weighted_observed_agreement) %>%
+  rename(lamina_propria_unweighted = observed_agreement,
+         lamina_propria_weighted = weighted_observed_agreement)
+
+renamed_ie <- ie_lc%>%
+  select(slide_name, observed_agreement, weighted_observed_agreement) %>%
+  rename(intraepithelial_unweighted = observed_agreement,
+         intraepithelial_weighted = weighted_observed_agreement)
+
+observed_agreement <- left_join(renamed_ie, renamed_lp)
+
+  
+heatmap_data_agreement<- observed_agreement %>%
+  select(intraepithelial_unweighted, intraepithelial_weighted, lamina_propria_unweighted, lamina_propria_weighted)
+
+
+# Set row and column names
+colnames(heatmap_data_agreement) <- c("intraepithelia_unweighted", "intraepithelial_weighted",  "lamina_propria_unweighted", "lamina_propria_weighted")
+
+rownames(heatmap_data_agreement) <- observed_agreement$slide_name
+
+
+# Generate the heatmap
+heatmap_agreement <- pheatmap(heatmap_data_agreement, cluster_rows = TRUE, cluster_cols = TRUE,  fontsize = 7)
+
+print(heatmap_agreement)
+
+# Save the plot as a tif file
+output_file_tif <- paste0(supplementaryFigures_dir,"S13_agreementBySlide.tif")
+tiff(output_file_tif, width = 3.5, height = 8.26, units = "in", res = 300)
+print(heatmap_agreement)
+dev.off()
+```
+

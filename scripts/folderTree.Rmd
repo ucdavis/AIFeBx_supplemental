@@ -1,0 +1,107 @@
+---
+title: "folderTree"
+author: "Wulcan"
+date: "2024-03-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Objective
+Generate a folder tree for the "Artificial intelligence-based quantificication of lymphocytes in small intestinal biopsies" paper
+
+### Set batch name and directories
+```{r set batch name and directories}
+batch <- "test_set_AIFeBx_paper"
+
+top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/supplementary_data/" #jmwMacBook
+#top_dir <- "C:/Users/jmwulcan/Box/Projects/AI/paper/supplementary_data/" #jmwDell
+#top_dir <- "C:/Users/15303/Box/Projects/paper/supplementary_data/" #JMW lenovo
+
+```
+
+```{r}
+#Define folder structure:
+
+folders <- c("input", 
+             "input/lymphocyte_coords_aiforia", 
+             "input/mucosa_coords_aiforia",
+             "input/pathologist_annotations",
+             "input/humanSemiQuant_grades",
+             "input/name_image",
+             "output", 
+             "figures",
+             "figures/supplementary/",
+             "figures/main/",
+             "tables",
+             "output/mergeModels/all", 
+             "output/mergeModels/by_slide", 
+             "output/mergeModels/by_slide/rawMucosa", 
+             "output/mergeModels/by_slide/rawMucosa/coordinates",
+             "output/mergeModels/by_slide/rawMucosa/plots", 
+             "output/mergeModels/by_slide/filteredMucosa",
+             "output/mergeModels/by_slide/filteredMucosa/coordinates",
+             "output/mergeModels/by_slide/filteredMucosa/plots",
+             "output/mergeModels/by_slide/outlines", 
+             "output/mergeModels/by_slide/outlines/coordinates",
+             "output/mergeModels/by_slide/outlines/plots",
+             "output/mergeModels/by_slide/fragments",
+             "output/mergeModels/by_slide/fragments/coordinates", 
+             "output/mergeModels/by_slide/fragments/plots", 
+             "output/mergeModels/by_slide/fragments/metadata",
+             "output/mergeModels/by_slide/fragments/order",
+             "output/mergeModels/by_slide/validMucosa",
+             "output/mergeModels/by_slide/validMucosa/coordinates", 
+             "output/mergeModels//by_slide/rawLc",
+             "output/mergeModels/by_slide/rawLc/coordinates", 
+             "output/mergeModels/by_slide/rawLc/plots",
+             "output/mergeModels/by_slide/lcPoint", 
+             "output/mergeModels/by_slide/lcPoint/coordinates",
+             "output/mergeModels/by_slide/lcMucosa", 
+             "output/mergeModels/by_slide/lcMucosa/coordinates",
+             "output/mergeModels/by_slide/fragmentDensity", 
+             "output/mergeModels/by_slide/fragmentDensity/coordinates",
+             "output/mergeModels/by_slide/fragmentDensity/metadata", 
+             "output/mergeModels/by_slide/fragmentDensity/plots",
+             "output/mergeModels/by_slide/lcSeg/coordinates",
+             "output/randomRois/all",
+             "output/wsiAssessment/",
+             "output/lymphocyteValidation/all",
+             "output/lymphocyteValidation/bySlide",
+             "output/lymphocyteValidation/bySlide/rawAnnotations",
+             "output/lymphocyteValidation/bySlide/sfAnnotations",
+             "output/lymphocyteValidation/bySlide/sfAnnotations/coordinates",
+             "output/lymphocyteValidation/bySlide/bbAnnotations",
+             "output/lymphocyteValidation/bySlide/bbAnnotations/coordinates",
+             "output/lymphocyteValidation/bySlide/bbAnnotations/plots",
+             "output/lymphocyteValidation/bySlide/roisAiforia",
+             "output/lymphocyteValidation/bySlide/lcMucosa_roi/coordinates/",
+             "output/lymphocyteValidation/bySlide/lcSeg_roi/coordinates/",
+             "output/lymphocyteValidation/bySlide/validMucosa_roi/coordinates/",
+             "output/lymphocyteValidation/bySlide/predictions/coordinates/",
+             "output/lymphocyteValidation/bySlide/predictions/plots/",
+             "output/lymphocyteValidation/bySlide/annotationsDistCoord/",
+             "output/lymphocyteValidation/bySlide/distanceWithin/",
+             "output/lymphocyteValidation/bySlide/candidateLc/",
+             "output/wsiGrades_parsed",
+             "output/wsiAI_vs_path",
+             "output/wsiReproducibility"
+             
+             
+             
+             )
+
+
+# Create directories
+for (folder in folders) {
+  dir_path <- file.path(top_dir, batch, folder)
+  if (!file.exists(dir_path)) {
+    dir.create(dir_path, recursive = TRUE)
+    cat("Created directory:", dir_path, "\n")
+  } else {
+    cat("Directory already exists:", dir_path, "\n")
+  }
+}
+```

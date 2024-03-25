@@ -1,0 +1,941 @@
+---
+title: "mergeModels"
+author: "Wulcan"
+date: "2024-02-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Objective
+Generate coordinates for intraepithelial and lamina propria lymphocytes, with info on 
+tissue fragment 
+Merge the output coordinates of
+  - An object detection model for lymphocyte identification
+  - A semantic segmentation model for mucosal tissue compartment identification
+
+## Folder tree
+The script "folderTree" generates a folder tree that is used in this script. 
+
+## Input Data
+The lymphocyte detection model (lc_1_5000_v11) and the mucosal tissue compartment 
+model (tissue9_3000_v24) were developed in Aiforia Create, and the output coordinates
+received as custom geojsons (one per model per WSI) in um unit. Download them and move them to the respective input file after creating the folder tree.
+
+## Output data
+A vectore "slideNames" with the names of all slides in the project
+A series of geojson files with coordinates for:
+- rawMucosa (The same files as read in from Aiforia, but in rds format, comes with a folder of PNG plots)
+- filteredMucosa
+- tissue outline
+- tissue fragments
+- rawLymphocytes (nuclear outlines)
+- lymphocytes centers
+- lymphocyte centers with tissue compartment and tissue fragment info
+
+
+## Issues
+- For sf package area operations does not run with the read crs. 
+Solution: st_set_crs 0 while reading in original. 
+
+- Prints are flipped vertical compared to original. This is due to image coordinates 0,0 being top left and and graphs starting bottom left. This only affects plots, the output coordinates still projects right when viewed in QuPath. To generate correct plots, use fix function below.
+
+- The coordinates for these files are in um. They need to be in pixels to project right on QuPath.
+
+
+## Deviations
+- **Renamed 9.60E+05 manually to 96e4** The slide_name 96e4 was autocorrected to scientific notation (9.60E+05) in excel prior to scanning. The slide_name 9.60E+05 is inconsistently captured in this script (repeated printing to file_name and re-reading)
+
+- There are 4 invalid geometries in 6mj7 rawMucosa files - filtered out for now (two are lumen two are very small epithelium)
+
+### Load libraries
+```{r load libraries, message = F}
+library(tidyverse)
+library(sf) # library for working with geojson files
+Sys.setenv(OGR_GEOJSON_MAX_OBJ_SIZE = 0) # remove max size geojsons
+sf_use_s2(FALSE) #disables the spherical geometry package for sf
+library(nngeo)#this is needed for removing wholes when creating tissue outline
+options(scipen = 999) #turn of scientific notation
+library(patchwork) # used to generate composite plots in fragmentDensity chunk
+```
+
+
+### Set batch name and directories
+```{r set batch name and directories}
+batch <- "test_set_AIFeBx_paper"
+
+top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/supplementary_data/" #jmwMacBook
+#top_dir <- "C:/Users/jmwulcan/Box/Projects/AI/paper/supplementary_data/" #jmwDell
+
+#Set current date
+currentDate <- format(Sys.Date(), format = "%Y-%m-%d")
+
+#Generate sub-directory variables (for the folder tree created with "folderTree.Rmd")
+rawMucosa_basename <- "_rawMucosa_"
+rawMucosaAiforia_dir <-paste0(top_dir,batch,"/input/mucosa_coords_aiforia/")
+rawMucosaCoords_dir <- paste0(top_dir,batch,"/output/mergeModels/by_slide/rawMucosa/coordinates/")
+rawMucosaPlots_dir <- paste0(top_dir,batch,"/output/mergeModels/by_slide/rawMucosa/plots/")
+filteredMucosa_basename <- "_filteredMucosa_"
+filteredMucosaCoords_dir <- paste0(top_dir,batch,"/output/mergeModels/by_slide/filteredMucosa/coordinates/")
+filteredMucosaPlots_dir<-  paste0(top_dir,batch,"/output/mergeModels/by_slide/filteredMucosa/plots/")
+outline_basename <- "_outlines_"
+outlineCoords_dir  <-  paste0(top_dir,batch,"/output/mergeModels/by_slide/outlines/coordinates/")
+outlinePlots_dir <-  paste0(top_dir,batch,"/output/mergeModels/by_slide/outlines/plots/")
+fragments_basename <- "_fragments_"
+fragmentCoords_dir <- paste0(top_dir,batch,"/output/mergeModels/by_slide/fragments/coordinates/")
+fragmentMetadata_dir <- paste0(top_dir,batch,"/output/mergeModels/by_slide/fragments/metadata/")
+fragmentOrder_dir <-paste0(top_dir,batch,"/output/mergeModels/by_slide/fragments/order/")
+fragmentPlots_dir <- paste0(top_dir,batch,"/output/mergeModels/by_slide/fragments/plots/")
+validMucosa_basename <- "_validMucosa"
+validMucosaCoords_dir <- paste0(top_dir,batch,"/output/mergeModels/by_slide/validMucosa/coordinates/")
+rawLc_basename <- "_rawLc_"
+rawLc_Aiforia_dir <-paste0(top_dir,batch,"/input/lymphocyte_coords_aiforia/")
+rawLcCoords_dir <- paste0(top_dir,batch,"/output/mergeModels/by_slide/rawLc/coordinates/")
+rawLcPlots_dir <- paste0(top_dir,batch,"/output/mergeModels/by_slide/rawLc/plots/")
+lcPoint_basename <- "_lc_point_"
+lcPointCoords_dir <- paste0(top_dir,batch,"/output/mergeModels/by_slide/lcPoint/coordinates/")
+lcMucosa_basename <- "_lcMucosa_"
+lcMucosaCoords_dir <-paste0(top_dir,batch,"/output/mergeModels/by_slide/lcMucosa/coordinates/")
+fragmentDensity_basename <- "_density_"
+fragmentDensityCoords_dir <-paste0(top_dir,batch,"/output/mergeModels/by_slide/fragmentDensity/coordinates/")
+fragmentDensity_metadata_dir <-paste0(top_dir,batch,"/output/mergeModels/by_slide/fragmentDensity/metadata/")
+fragmentDensity_plots_dir <- paste0(top_dir,batch,"/output/mergeModels/by_slide/fragmentDensity/plots/")
+slideDensity_basename <- "slideDensity_"
+slideDensityMetadata_dir <- paste0(top_dir,batch,"/output/mergeModels/all/")
+slideSummary_basename <- "slideSummary_"
+slideSummaryMetadata_dir <- paste0(top_dir,batch,"/output/mergeModels/all/")
+lcSeg_dir <- paste0(top_dir,batch,"/output/mergeModels/by_slide/lcSeg/coordinates/")
+
+```
+
+
+### Two functions to flip y coordinates (see issue above)
+```{r flipYcoord}
+#Prints are flipped vertical compared to original. This is due to image coordinates 0,0 being top left and and graphs starting bottom left. Can be fixed with a flipYcoord function, either in graoh (alternative 1) or by changning the geometry (alternative 2) by multiply y coordinates with -1:
+
+#Alternative 1 
+flipYcoord_graph <- function(geom) {
+  sf::st_transform(geom, pipeline =
+                     "+proj=pipeline +step +proj=axisswap +order=1,-2", reverse = TRUE)
+}
+#Use in plot by: 
+#ggplot() +
+  #geom_sf(data = flipYcoord(results))
+
+
+#Alternative 2: flip Y-coord in geometry by multiplying Y-coordinates with -1)
+flipYcoord_geometry <- function(geom) {
+  sf::st_geometry(geom) <- sf::st_geometry(geom) *
+    matrix(c(1, 0, 0,
+              0, -1, 0,
+              0, 0, 1), nrow = 3)
+
+  geom
+}
+
+```
+
+###Read raw mucosa files (quick)
+This chunk reads in the raw mucosa files from Aiforia, saves them unaltered as .rds files, and plots the raw mucosa per slide
+```{r}
+# Generate a vector of file_paths in the input mucosa folder 
+
+#generate a list of file_paths for geojson files in the directory
+filePathsMucosa <- list.files(path = paste0(top_dir, batch, "/input/mucosa_coords_aiforia/"), pattern = "*geojson", full.names = TRUE)
+
+# Generate a vector of slideNames for which there are files in the input raw_mucosa folder and save as rds
+
+#generate a list of unique slide names from the folder
+slideNames <- character(0)
+fileName <- character(0)
+nameParts <- character(0)
+nameSlide <- character(0)
+for (filePath in filePathsMucosa) {
+  fileName <- basename(filePath)
+  nameParts <- strsplit(fileName, "_")[[1]] #separate the elements of the  file path 
+  nameSlide <- nameParts[5] #use the 5th element as the slide name
+ 
+  if (!(nameSlide %in% slideNames)) {
+    slideNames<- c(slideNames,nameSlide)
+  }
+  
+}
+
+#Save slideNames to rds
+
+saveRDS(slideNames, paste0(top_dir,batch,"/output/mergeModels/all/slideNames.rds"))
+
+
+#Read in raw mucosa coordinates from aiforia files and save as output rds
+for (name in slideNames){
+  
+  # RawMucosa_coordinates
+  
+  #If a rawMucosa coordinate file does not exist, generate and save
+  if (!any(sapply(list.files(rawMucosaCoords_dir), function(file_name) grepl(name, file_name)))) {
+    
+    fileName_mucosaAiforia <- character(0)
+    nameParts_mucosaAiforia <- character(0)
+    nameSlide_mucosaAiforia <- character(0)
+    
+    for (filePath in filePathsMucosa) {
+      fileName_mucosaAiforia <- basename(filePath)
+      nameParts_mucosaAiforia <- strsplit(fileName_mucosaAiforia, "_")[[1]]
+      nameSlide_mucosaAiforia <- nameParts_mucosaAiforia[5]
+      
+      rawMucosaCoords <- NULL
+      
+      if(nameSlide_mucosaAiforia == name){
+        rawMucosaCoords <- st_read(filePath) %>% st_set_crs(., 0)
+        saveRDS(rawMucosaCoords, paste0(rawMucosaCoords_dir,name,rawMucosa_basename,currentDate,".rds"))
+      }
+    }
+  } 
+  
+  #RawMucosa plots
+  #Generate plot of it doesn't already exist and if there is a input file for it
+  matching_files_rawMucosaCoords <- list()
+  if(!any(sapply(list.files(rawMucosaPlots_dir), function(file_name) grepl(name, file_name)))){
+    matching_files_rawMucosaCoords <- list.files(path = rawMucosaCoords_dir, pattern = paste0("^", name))
+    rawMucosaCoords <- NULL
+    rawMucosaCoords_path <- character(0)
+    if (length(matching_files_rawMucosaCoords) > 0) {
+      rawMucosaCoords_path <- file.path(rawMucosaCoords_dir, matching_files_rawMucosaCoords[1])
+      rawMucosaCoords <- readRDS(rawMucosaCoords_path)
+      png(paste0(rawMucosaPlots_dir,name,rawMucosa_basename,currentDate,".png"), width = 1920, height = 1080)
+      print(ggplot() +
+              geom_sf(data = flipYcoord_graph(rawMucosaCoords), aes(fill = class_label)) +
+              theme_bw() + 
+              scale_fill_manual(values = c("Epithelium" = "yellow", "Lamina propria" = "purple", "Lumen" = "lightblue")))
+      dev.off()
+    }
+  }
+}
+```
+
+### Filter mucosa (quick) 
+This chunk filters out mucosal regions not used in the merge (lumen) and saves remaining regions
+(epithelium and lamina propria) as rds files with accompaning plots.
+
+#### Deviations: 
+- There are 4 invalid geometries in 6mj7 rawMucosa files - filtered out for now (two are lumen two are very small epithelium)
+```{r filter mucosa}
+slideNames <- readRDS(paste0(top_dir,batch,"/output/mergeModels/all/slideNames.rds"))
+
+for (name in slideNames){
+  matching_files_rawMucosaCoords <- list()
+  
+  if (!any(sapply(list.files(filteredMucosaCoords_dir), function(file_name) grepl(name, file_name)))) {
+    
+    matching_files_rawMucosaCoords <- list.files(path = rawMucosaCoords_dir, pattern = paste0("^", name))
+    
+    rawMucosaCoords_path <- character(0)
+    rawMucosaCoords <- NULL
+    filteredMucosaCoords <- NULL
+    invalid_geom_indices <- NULL
+    
+    if (length(matching_files_rawMucosaCoords) > 0) {
+      rawMucosaCoords_path <- file.path(rawMucosaCoords_dir, matching_files_rawMucosaCoords[1])
+      rawMucosaCoords <- readRDS(rawMucosaCoords_path)
+      filteredMucosaCoords<- rawMucosaCoords %>%
+        filter(class_label != "Lumen")
+      #invalid_geom_indices <- which(!st_is_valid(filteredMucosaCoords)) #temp fix slide 6mj7
+      #filteredMucosaCoords <- filteredMucosaCoords[ -invalid_geom_indices, ] #temp fix slide 6mj7
+      saveRDS(filteredMucosaCoords, paste0(filteredMucosaCoords_dir,name,filteredMucosa_basename,currentDate,".rds"))
+    }
+  }
+  
+  #Filtered mucosa plots (plot if plot absent and input file present)
+  
+  matching_files_filteredMucosaCoords <- list()
+  if(!any(sapply(list.files(filteredMucosaPlots_dir), function(file_name) grepl(name, file_name)))){
+    matching_files_filteredMucosaCoords <- list.files(path = filteredMucosaCoords_dir, pattern = paste0("^", name))
+    
+    filteredMucosaCoords_path <- character(0)
+    filteredMucosaCoords <- NULL
+    if (length(matching_files_filteredMucosaCoords) > 0) {
+      filteredMucosaCoords_path <- file.path(filteredMucosaCoords_dir, matching_files_filteredMucosaCoords[1])
+      filteredMucosaCoords <- readRDS(filteredMucosaCoords_path)
+      png(paste0(filteredMucosaPlots_dir,name,filteredMucosa_basename,currentDate,".png"), width = 1920, height = 1080)
+      print(ggplot() +
+              geom_sf(data = flipYcoord_graph(filteredMucosaCoords), aes(fill = class_label)) +
+              theme_bw() + 
+              scale_fill_manual(values = c("Epithelium" = "yellow", "Lamina propria" = "purple", "Lumen" = "lightblue")))
+  dev.off()
+    }
+  }
+}
+```
+
+### Define tissue fragments (very slow)
+This chunk generates separate tissue fragments, through clustering mucosal components close to each other. It is computationally heavy to run. In addition to generate output coordinates for tissue fragments, and plots, it generates coordinates and plots for an intermediate step (outlines), coordinates for mucosa belonging to valid fragments (over a certain size) and some metadata for the fragments and an rds with fragment order (large to small) for each slide.
+
+#### Issues
+Time consuming and imperfect (merges tissue fragments that are overlapping)
+
+```{r define tissue fragments}
+
+#Set buffer width around outlines
+width = 100
+
+#Set threshold for valid fragment
+minArea_um2 <- 3000
+
+slideNames <- readRDS(paste0(top_dir,batch,"/output/mergeModels/all/slideNames.rds"))
+
+for (name in slideNames){
+  
+  #Outline coordinates - makes outlines around filtered mucosa to serve a base for fragment generation (generate if output absent and input file present)
+  
+  matching_files_filteredMucosaCoords <- list()
+  
+  if (!any(sapply(list.files(outlineCoords_dir), function(file_name) grepl(name, file_name)))) {
+    
+    matching_files_filteredMucosaCoords <- list.files(path = filteredMucosaCoords_dir, pattern = paste0("^", name))
+    
+    filteredMucosaCoords_path <- character(0)
+    filteredMucosaCoords <- NULL
+    outlineCoords <- NULL
+    
+    if (length(matching_files_filteredMucosaCoords) > 0) {
+      filteredMucosaCoords_path <- file.path(filteredMucosaCoords_dir, matching_files_filteredMucosaCoords[1])
+      filteredMucosaCoords <- readRDS(filteredMucosaCoords_path)
+      outlineCoords <- st_union(filteredMucosaCoords) %>% st_remove_holes()
+      saveRDS(outlineCoords, paste0(outlineCoords_dir,name,outline_basename,currentDate,".rds"))
+    }
+  }
+  
+  #Outline plots - generate if output plot absent and inout file present
+  
+  matching_files_outlineCoords <- list()
+  
+  if(!any(sapply(list.files(outlinePlots_dir), function(file_name) grepl(name, file_name)))){
+    
+    matching_files_outlineCoords <- list.files(path = outlineCoords_dir, pattern = paste0("^", name))
+    
+    outlineCoords_path <- character(0)
+    outlineCoords <- NULL
+    
+    if (length(matching_files_outlineCoords) > 0) {
+      outlineCoords_path <- file.path(outlineCoords_dir, matching_files_outlineCoords[1])
+      outlineCoords <- readRDS(outlineCoords_path)
+      png(paste0(outlinePlots_dir,name,outline_basename,currentDate,".png"), width = 1920, height = 1080)
+      print(ggplot() +
+              geom_sf(data = flipYcoord_graph(outlineCoords), aes(fill = "grey")) +
+              theme_bw())
+      dev.off()
+    }
+  }
+  
+  #Fragment coordinates, validMucosa coordinates, fragmentMetadata and fragmentOrder - (generate if output file absent and input files present)
+  
+  matching_files_outlineCoords <- list()
+  matching_files_filteredMucosaCoords <- list()
+  
+  if (!any(sapply(list.files(fragmentCoords_dir), function(file_name) grepl(name, file_name)))) {
+    
+    matching_files_outlineCoords <- list.files(path = outlineCoords_dir, pattern = paste0("^", name))
+    
+    outlineCoordsPath <- character(0)
+    outlineCoords <- NULL
+    fragmentCoords <- NULL
+    
+    
+    #If there is a matching outline file, pull outline and generate fragment (temp)
+    if (length(matching_files_outlineCoords) > 0) {
+      outlineCoordsPath <- file.path(outlineCoords_dir, matching_files_outlineCoords[1])
+      outlineCoords <- readRDS(outlineCoordsPath)
+      fragmentCoords <- st_buffer(outlineCoords, dist = width) %>%
+        st_cast('POLYGON') %>%
+        st_as_sf %>%
+        mutate(fragment_area = st_area(x)) %>%
+        arrange(desc(fragment_area)) %>%
+        mutate(fragment = paste0('f', fragment_area)) %>%
+        mutate(fragment = factor(fragment, levels = unique(fragment))) 
+      }
+    
+    #Check for matching filtered mucosa files
+    matching_files_filteredMucosaCoords <- list.files(path = filteredMucosaCoords_dir, pattern = paste0("^", name))
+    
+    filteredMucosaCoords_path <- character(0)
+    filteredMucosaCoords <- NULL
+    
+    
+    #If there is a matching filtered mucosa file, pull it 
+    if (length(matching_files_filteredMucosaCoords) > 0) {
+      filteredMucosaCoords_path <- file.path(filteredMucosaCoords_dir, matching_files_filteredMucosaCoords[1])
+      filteredMucosaCoords <- readRDS(filteredMucosaCoords_path)
+    }
+    
+    
+    
+    # if there is both a matching outlines file and a matching filtered mucosa file, merge fragment with mucosa, generate metadata and order 
+    
+    fragmentMucosaCoords <- NULL
+    fragmentMetadata <- NULL
+    fragmentOrder <- NULL
+    validMucosaCoords <- NULL
+    validMucosaCoords_renamed <- NULL
+    validFragmentCoords <- NULL
+    
+    if (length(matching_files_outlineCoords) > 0 && length(matching_files_filteredMucosaCoords) > 0) {
+      
+      #Merge fragment with mucosa
+      fragmentMucosaCoords <- st_join(filteredMucosaCoords, fragmentCoords, join = st_within)
+      
+      #Generate metadata
+      fragmentMetadata <- fragmentMucosaCoords %>%
+        st_drop_geometry() %>%
+        group_by(fragment) %>%
+        summarise(fragment_area_um2=sum(measured_area_um2)) %>%
+        ungroup() %>%
+        arrange(desc(fragment_area_um2)) %>%
+        mutate(fragment_percent_of_slide=fragment_area_um2/sum(fragment_area_um2)*100) %>%
+        mutate(fragment_name = paste0('f',1:n())) %>%
+        mutate(fragment_name2 = paste0(fragment_name, "_a", round(fragment_area_um2/10000))) %>%
+        mutate(valid_fragment = ifelse(fragment_area_um2 > minArea_um2, T, F))
+      saveRDS(fragmentMetadata, paste0(fragmentMetadata_dir,name,fragments_basename,currentDate,".rds"))
+      
+      # Generate order
+      fragmentOrder <- fragmentMetadata$fragment_name
+      saveRDS(fragmentOrder, paste0(fragmentOrder_dir,name,fragments_basename,currentDate,".rds"))
+      
+      #Generate validMucosa coordinates by merging fragmentMucosa coordinates with fragmentMetadata
+      
+      validMucosaCoords <- left_join(fragmentMucosaCoords,fragmentMetadata, by="fragment")
+      
+      #rename in prep for later merging with lymphocytes
+      validMucosaCoords_renamed <- validMucosaCoords %>%
+        rename_at(vars(class_label:valid_fragment), function(x) paste0('mucosa_',x))
+      saveRDS(validMucosaCoords_renamed, paste0(validMucosaCoords_dir,name,validMucosa_basename,currentDate,".rds"))
+      
+      # add in metadata to fragment coords and save as rds
+      validFragmentCoords <- left_join(fragmentCoords, fragmentMetadata, by='fragment')
+      validFragmentCoords$fragment_name <- factor(validFragmentCoords$fragment_name, levels = fragmentOrder)
+      saveRDS(validFragmentCoords, paste0(fragmentCoords_dir,name,fragments_basename,currentDate,".rds"))
+    }
+  }
+  
+  # Fragment plots (generate if absent and input files present)
+  
+   matching_files_outlineCoords <- list()
+   matching_file_fragmentCoords <- list()
+   matching_file_fragmentOrder <- list()
+   
+   if(!any(sapply(list.files(fragmentPlots_dir), function(file_name) grepl(name, file_name)))){
+     
+     #If outlinesCoords file is present read it in
+     matching_files_outlineCoords <- list.files(path = outlineCoords_dir, pattern = paste0("^", name))
+     
+     outlineCoords_path <- character(0)
+     outlineCoords <- NULL
+     
+     if (length(matching_files_outlineCoords) > 0) {
+       
+       outlineCoords_path <- file.path(outlineCoords_dir, matching_files_outlineCoords[1])
+       outlineCoords <- readRDS(outlineCoords_path)
+     }
+       
+      #If fragmentCoords file is present read it in
+     
+     matching_files_fragmentCoords <- list.files(path = fragmentCoords_dir, pattern = paste0("^", name))
+     
+     fragmentCoords_path <- character(0)
+     fragmentCoords <- NULL
+     
+     if (length(matching_files_fragmentCoords) > 0) {
+       fragmentCoords_path <- file.path(fragmentCoords_dir, matching_files_fragmentCoords[1])
+       fragmentCoords<- readRDS(fragmentCoords_path)
+     }
+   
+    
+     matching_files_fragmentOrder <- list.files(path = fragmentOrder_dir, pattern = paste0("^", name))
+     
+     fragmentOrder_path <- character(0)
+     fragmentOrder<- NULL
+     
+     if (length(matching_files_fragmentOrder) > 0) {
+       fragmentOrder_path <- file.path(fragmentOrder_dir, matching_files_fragmentOrder[1])
+       fragmentOrder<- readRDS(fragmentOrder_path)
+     }
+  
+    #If both outlines coords and fragment coords files are present -plot it
+     if (length(matching_files_outlineCoords) > 0 && length(matching_files_fragmentCoords) > 0 && length(matching_files_fragmentOrder) > 0){
+       png(paste0(fragmentPlots_dir,name,fragments_basename,currentDate,".png"), width = 1920, height = 1080)
+       
+       fragmentCoords$fragment_name <- factor(fragmentCoords$fragment_name, levels = fragmentOrder)
+       print(ggplot() + 
+               geom_sf(data = flipYcoord_graph(fragmentCoords), aes(fill=fragment_name)) + 
+               geom_sf(data = flipYcoord_graph(outlineCoords), fill = "grey") +
+               theme(legend.position = 'none') + 
+               theme_bw())
+       dev.off()
+     }
+   }
+  
+}
+
+```
+
+###Read raw lymphocyte files (quick)
+This chunk reads in the raw lymphocyte files from Aiforia, saves them unaltered as .rds files (with plots)
+```{r}
+slideNames <- readRDS(paste0(top_dir,batch,"/output/mergeModels/all/slideNames.rds"))
+
+#generate a list of file_paths for geojson files in the directory
+filePaths_lc <- list.files(path = paste0(top_dir, batch, "/input/lymphocyte_coords_aiforia/"), pattern = "*geojson", full.names = TRUE)
+
+
+for (name in slideNames){
+   if (!any(sapply(list.files(rawLcCoords_dir), function(file_name) grepl(name, file_name)))) {
+     
+     fileName_lcAiforia <- character(0)
+     nameParts_lcAiforia <- character(0)
+     nameSlide_lcAiforia <- character(0)
+     nameMod_lcAiforia <- character(0)
+     nameModel_lcAiforia <- character(0)
+     nameRoi_lcAiforia <- character(0)
+     path_lcAiforia <- character(0)
+     
+     for (filePath in filePaths_lc) {
+       fileName_lcAiforia <- basename(filePath)
+       nameParts_lcAiforia<- strsplit(fileName_lcAiforia, "_")[[1]]
+       nameSlide_lcAiforia<- nameParts_lcAiforia[6] 
+       nameMod_lcAiforia <- paste(nameParts_lcAiforia[2:5], collapse = "_") #the 2nd to 5th element is the project
+       nameModel_lcAiforia <- gsub(" ","_",nameMod_lcAiforia) #remove spaces
+       nameRoi_lcAiforia<- gsub(".geojson","",nameParts_lcAiforia[7])
+       path_lcAiforia <- filePath
+       
+       rawMucosaCoords <- NULL
+       
+       if(nameSlide_lcAiforia == name && nameModel_lcAiforia == 'lc_1_5000_v11' && !grepl("RoI", nameRoi_lcAiforia)) {
+         
+      rawLcCoords <- st_read(path_lcAiforia) %>% st_set_crs(., 0)
+      saveRDS(rawLcCoords, paste0(rawLcCoords_dir, name, rawLc_basename, currentDate, ".rds")) 
+       }
+     }
+   }
+  
+  #RawLc plots (plot of absent and rawLc_coords present)
+   
+   matching_files_rawLcCoords <- list()
+   
+   if(!any(sapply(list.files(rawLcPlots_dir), function(file_name) grepl(name, file_name)))){
+     
+     matching_files_rawLcCoords <- list.files(path = rawLcCoords_dir, pattern = paste0("^", name))
+     
+     rawLcCoords_path <- character(0)
+     rawLcCoords <- NULL
+     
+    if (length(matching_files_rawLcCoords) > 0) {
+      
+      rawLcCoords_path <- file.path(rawLcCoords_dir, matching_files_rawLcCoords[1])
+      rawLcCoords <- readRDS(rawLcCoords_path)
+      
+      png(paste0(rawLcPlots_dir,name,rawLc_basename,currentDate,".png"), width = 1920, height = 1080)
+      
+      print(ggplot() + 
+              geom_sf(data = flipYcoord_graph(rawLcCoords), aes(fill = class_label)) +
+              theme_bw() + 
+              scale_fill_manual(values = c("Lymphocytes" = "orange")))
+      dev.off()
+    }
+   }
+}
+```
+
+
+### Transform lymphocyte nuclei polygons to lymphocyte centroid point coordinates (slow)
+This chunk reads in raw Lymphocyte files and transform them to point coordinates for lymphocyte nuclei (saved by slide in lcPoint folder). In addition some columns are renamed, in preparation for merging with mucosal model output.
+
+```{r lcPoints}
+
+slideNames <- readRDS(paste0(top_dir,batch,"/output/mergeModels/all/slideNames.rds"))
+
+for (name in slideNames){
+  
+ #lcPoints - transforms lc polygons to centroid points (ignores instance_segmentation) and renames columns(prep to join with mucosa)
+   
+   matching_files_rawLcCoords <- list()
+   
+   if (!any(sapply(list.files(lcPointCoords_dir), function(file_name) grepl(name, file_name)))) {
+     
+    matching_files_rawLcCoords <- list.files(path = rawLcCoords_dir, pattern = paste0("^", name))
+    
+    rawLcCoords_path <- character(0)
+    rawLcCoords <- NULL
+    lcPointCoords<- NULL
+    lcPointCoords_renamed <- NULL
+    
+    if (length(matching_files_rawLcCoords) > 0) {
+      
+      rawLcCoords_path <- file.path(rawLcCoords_dir, matching_files_rawLcCoords[1])
+      rawLcCoords <- readRDS(rawLcCoords_path)
+      
+      lcPointCoords <- st_centroid(rawLcCoords)
+      lcPointCoords_renamed <- lcPointCoords %>%
+        rename_at(vars(class_label:slide_name), function(x) paste0('lc_',x))
+      saveRDS(lcPointCoords_renamed, paste0(lcPointCoords_dir,name, lcPoint_basename,currentDate,".rds"))
+    }
+   }
+}
+```
+
+### Merge lymphocyte (centroid) coordinates with mucosal coordinates (slow)
+This chunks saves the lymphocytes that overlap with valid mucosa fragments
+```{r lcMucosa}
+slideNames <- readRDS(paste0(top_dir,batch,"/output/mergeModels/all/slideNames.rds"))
+
+for (name in slideNames){
+  matching_files_validMucosa <- list()
+   matching_files_lcPoint <- list()
+   
+   if (!any(sapply(list.files(lcMucosaCoords_dir), function(file_name) grepl(name, file_name)))) {
+     
+      matching_files_validMucosa <- list.files(path = validMucosaCoords_dir, pattern = paste0("^", name))
+      
+      validMucosaPath <- character(0)
+      validMucosaCoords <- NULL
+      
+      if (length(matching_files_validMucosa) > 0) {
+      validMucosaPath<- file.path(validMucosaCoords_dir, matching_files_validMucosa[1])
+      validMucosaCoords <- readRDS(validMucosaPath)
+      }
+      
+      matching_files_lcPoint <- list.files(path = lcPointCoords_dir, pattern = paste0("^", name))
+      
+      lcPointPath <- character(0)
+      lcPointCoords <- NULL
+      
+      if (length(matching_files_lcPoint) > 0) {
+        lcPointPath<- file.path(lcPointCoords_dir, matching_files_lcPoint[1])
+        lcPointCoords <- readRDS(lcPointPath)
+      }
+      
+      lcMucosaCoords <- NULL
+      
+      if(length(matching_files_validMucosa) > 0 && length(matching_files_lcPoint > 0)) {
+        lcMucosaCoords <- st_intersection(lcPointCoords, validMucosaCoords)
+        saveRDS(lcMucosaCoords, paste0(lcMucosaCoords_dir,name,lcMucosa_basename,currentDate,".rds"))
+        
+      }
+   }
+}
+```
+
+### Calculate fragment density (quick)
+This chunk uses the output coordinates for validMucosa and fragment order ("define tissue fragment" chunk) and lcMucosa ("lcMucosa" chunk), joins the metadata for mucosa and lymphocytes and calculates density per fragment (density_metadata). The metadata are joined back ith the lcMucosa coordinates and saved as fragmentDensity coordinates. Plots per fragment are also generated (with maps of where on the slide they are). In additon tables with density per fragment for all slides, and summary stats per slide (averaged over fragments that are larger then 0.2 mm2) are generated.
+```{r fragment density}
+slideNames <- readRDS(paste0(top_dir,batch,"/output/mergeModels/all/slideNames.rds"))
+
+plotPath <- character(0)
+slideDensityMetadata<- data.frame()
+
+for (name in slideNames){
+   #fragmentDensity
+   
+   #Check if the name is not present in any file name in the output folder
+   matching_files_validMucosa <- list()
+   matching_files_lcMucosa <- list()
+   matching_files_fragmentOrder <- list()
+   
+   if (!any(sapply(list.files(fragmentDensityCoords_dir), function(file_name) grepl(name, file_name)))) {
+     matching_files_validMucosa <- list.files(path = validMucosaCoords_dir, pattern = paste0("^", name))
+     
+     validMucosaPath <- character(0)
+     validMucosaCoords <- NULL
+     
+     if (length(matching_files_validMucosa) > 0) {
+      validMucosaPath<- file.path(validMucosaCoords_dir, matching_files_validMucosa[1])
+      validMucosaCoords<- readRDS(validMucosaPath)
+     }
+     
+     matching_files_lcMucosa<- list.files(path = lcMucosaCoords_dir, pattern = paste0("^", name))
+     
+     lcMucosaPath<- character(0)
+     lcMucosaCoords <- NULL
+     
+     if (length(matching_files_lcMucosa) > 0) {
+      lcMucosaPath<- file.path(lcMucosaCoords_dir, matching_files_lcMucosa[1])
+      lcMucosaCoords <- readRDS(lcMucosaPath)
+     }
+     
+     matching_files_fragmentOrder <- list.files(path = fragmentOrder_dir, pattern = paste0("^", name))
+    
+    fragmentOrderPath <- character(0)
+    fragmentOrder <- NULL
+    
+    if (length(matching_files_fragmentOrder) > 0) {
+      fragmentOrderPath<- file.path(fragmentOrder_dir, matching_files_fragmentOrder[1])
+      fragmentOrder <- readRDS(fragmentOrderPath)
+    }
+    
+    validMucosa_metadata <- NULL
+    lcMucosa_metadata <- NULL
+    density_metadata <- NULL
+    lcMucosa_byFragment <- NULL
+    fragmentDensityCoords <- NULL
+    
+    if(length(matching_files_validMucosa) > 0 && length(matching_files_lcMucosa > 0) && length(matching_files_fragmentOrder) >0) {
+      
+      #generate mucosa metadata by fragment and label
+      validMucosa_metadata <- validMucosaCoords %>%
+        st_drop_geometry() %>%
+        as_tibble() %>%
+        group_by(mucosa_fragment_name, mucosa_class_label) %>%
+        summarise(fragment_label_area_um2 = sum(mucosa_measured_area_um2)) %>%
+        pivot_wider(names_from = mucosa_class_label, values_from = fragment_label_area_um2, values_fill = 0) %>%
+        rename(epithelium_area_um2 = Epithelium, lamina_propria_area_um2 = `Lamina propria`)  
+      
+      #generate leukocyte metadata by fragment and label
+      lcMucosa_metadata <- lcMucosaCoords %>%
+        st_drop_geometry() %>%
+        count(mucosa_fragment_name, mucosa_class_label, sort = T, name = "lc_n") %>%
+        pivot_wider(names_from = mucosa_class_label, values_from = lc_n, values_fill = 0) %>%
+        rename(epithelium_lc_n = Epithelium, lamina_propria_lc_n = `Lamina propria`)
+      
+      #generate density metadata
+      density_metadata <- full_join(validMucosa_metadata, lcMucosa_metadata, by = "mucosa_fragment_name") %>%
+        mutate_all(~replace_na(.,0)) %>%
+        mutate(mucosa_area_um2 = epithelium_area_um2 + lamina_propria_area_um2) %>%
+        mutate(epithelium_lcDensity_um2 = epithelium_lc_n / epithelium_area_um2) %>%
+        mutate(epithelium_lcDensity_1000um2 = epithelium_lc_n / (epithelium_area_um2 * 0.001)) %>%
+        mutate(epithelium_lcDensity_10000um2 = epithelium_lc_n / (epithelium_area_um2 * 0.0001)) %>%
+        mutate(epithelium_lcDensity_mm2 = epithelium_lc_n / (epithelium_area_um2 * 0.000001)) %>%
+        mutate(lamina_propria_lcDensity_um2 = lamina_propria_lc_n / lamina_propria_area_um2) %>%
+        mutate(lamina_propria_lcDensity_1000um2 = lamina_propria_lc_n / (lamina_propria_area_um2 * 0.001)) %>%
+        mutate(lamina_propria_lcDensity_10000um2 = lamina_propria_lc_n / (lamina_propria_area_um2 * 0.0001)) %>%
+        mutate(lamina_propria_lcDensity_mm2 = lamina_propria_lc_n / (lamina_propria_area_um2 * 0.000001)) %>%
+        
+        select(mucosa_fragment_name, mucosa_area_um2, epithelium_area_um2, lamina_propria_area_um2, epithelium_lc_n, lamina_propria_lc_n, epithelium_lcDensity_um2, epithelium_lcDensity_1000um2, epithelium_lcDensity_10000um2, epithelium_lcDensity_mm2, lamina_propria_lcDensity_um2, lamina_propria_lcDensity_1000um2, lamina_propria_lcDensity_10000um2, lamina_propria_lcDensity_mm2) %>%
+        arrange(factor(mucosa_fragment_name, levels = fragmentOrder))
+      saveRDS(density_metadata, paste0(fragmentDensity_metadata_dir,name,fragmentDensity_basename,currentDate,".rds"))
+      #generate fragment density by grouping lcMucosa and merging with metadata
+      lcMucosa_byFragment <- lcMucosaCoords %>%
+        group_by(mucosa_fragment_name, mucosa_fragment_area_um2, mucosa_fragment_name2) %>%
+        summarise() %>%
+        ungroup()
+      fragmentDensityCoords <- left_join(lcMucosa_byFragment, density_metadata, by = "mucosa_fragment_name", copy = TRUE) %>%
+        select(mucosa_fragment_name, mucosa_area_um2, epithelium_area_um2, lamina_propria_area_um2, epithelium_lc_n, lamina_propria_lc_n, epithelium_lcDensity_um2, epithelium_lcDensity_1000um2, epithelium_lcDensity_10000um2, epithelium_lcDensity_mm2, lamina_propria_lcDensity_um2, lamina_propria_lcDensity_1000um2, lamina_propria_lcDensity_10000um2, lamina_propria_lcDensity_mm2, geometry)
+       saveRDS(fragmentDensityCoords, paste0(fragmentDensityCoords_dir,name,fragmentDensity_basename,currentDate,".rds"))
+    }
+   }
+   
+   #Fragment density plots - generates plots for each fragment if plot folder doesn't exist, fragmentDensity_metadata, validMucosa and lcMucosa exists
+   
+   
+   plotPath <- paste0(fragmentDensity_plots_dir, name, "/")
+   
+   matching_files_validMucosa <- list()
+   matching_files_lcMucosa <- list()
+   matching_files_densityMetadata <- list()
+   
+   
+   
+   
+   
+   if (!file.exists(plotPath)){
+     
+     matching_files_validMucosa <- list.files(path = validMucosaCoords_dir, pattern = paste0("^", name))
+     validMucosaPath <- character(0)
+     
+     validMucosaCoords <- NULL
+     if (length(matching_files_validMucosa) > 0) {
+       validMucosaPath<- file.path(validMucosaCoords_dir, matching_files_validMucosa[1])
+       validMucosaCoords<- readRDS(validMucosaPath)
+     }
+     
+     matching_files_lcMucosa<- list.files(path = lcMucosaCoords_dir, pattern = paste0("^", name))
+     
+     lcMucosaPath<- character(0)
+     lcMucosaCoords <- NULL
+     
+     if (length(matching_files_lcMucosa) > 0) {
+       lcMucosaPath<- file.path(lcMucosaCoords_dir, matching_files_lcMucosa[1])
+       lcMucosaCoords <- readRDS(lcMucosaPath)
+     }
+     
+     
+      matching_files_densityMetadata <- list.files(path = fragmentDensity_metadata_dir, pattern = paste0("^", name))
+      
+      densityMetadataPath <- character(0)
+      densityMetadata<- NULL
+      
+      if (length(matching_files_densityMetadata) > 0) {
+        
+        densityMetadataPath<- file.path(fragmentDensity_metadata_dir, matching_files_densityMetadata[1])
+      densityMetadata <- readRDS(densityMetadataPath)
+      }
+      
+      fragment_names <- NULL
+     
+      if (length(matching_files_validMucosa) > 0 && length(matching_files_lcMucosa) > 0 && length(matching_files_densityMetadata) > 0) {
+        
+        dir.create(plotPath, recursive = TRUE)
+        fragment_names <- densityMetadata %>% pull(mucosa_fragment_name)
+        
+        validMucosa_subset <- NULL
+        lcMucosa_subset <- NULL
+        
+        for (fragment_name in fragment_names){
+          mucosa_subset <- validMucosaCoords %>% filter(mucosa_fragment_name == fragment_name)
+          
+          lcMucosa_subset <- lcMucosaCoords %>% filter(mucosa_fragment_name == fragment_name)
+          
+          mucosa_colors <- c("Epithelium" = "yellow", "Lamina propria" = "purple")
+          lcMucosa_colors <- c("Epithelium" = "orange", "Lamina propria" = "lightblue")
+          
+          png(paste0(plotPath,name,"_",fragment_name,fragmentDensity_basename,currentDate,".png"), width = 1920, height = 1080)
+          
+          plot_left <- ggplot() + 
+            geom_sf(data = flipYcoord_graph(validMucosaCoords), aes(color = factor(mucosa_fragment_name == fragment_name))) + 
+            scale_color_manual(values = c("TRUE" = "red", "FALSE" = "grey"))
+          
+          plot_right <- ggplot() + 
+            
+            geom_sf(data = flipYcoord_graph(mucosa_subset), aes(fill = mucosa_class_label)) +
+            geom_sf(data = flipYcoord_graph(lcMucosa_subset), aes(color = mucosa_class_label)) +
+            scale_fill_manual(values = mucosa_colors) + 
+            scale_color_manual(values = lcMucosa_colors) + 
+            theme_bw()
+          
+          composite_plot <- plot_left / plot_right
+          print(composite_plot)
+          dev.off()
+          
+        }
+        
+      }
+      
+   }
+   
+   #slideDensity generate all slide all fragment table with densities
+   
+   matching_files_densityMetadata <- list.files(path = fragmentDensity_metadata_dir, pattern = paste0("^", name))
+   
+   densityMetadataPath<- character(0)
+   densityMetadata<- NULL
+  
+   
+  if (length(matching_files_densityMetadata) > 0) {
+    
+    densityMetadataPath <- file.path(fragmentDensity_metadata_dir, matching_files_densityMetadata[1])
+    
+    densityMetadata<- readRDS(densityMetadataPath) %>% 
+      mutate(slide_name = name) %>% 
+      select(slide_name, mucosa_fragment_name:lamina_propria_lcDensity_mm2)
+    slideDensityMetadata <- bind_rows(slideDensityMetadata, densityMetadata)
+    saveRDS(slideDensityMetadata, paste0(slideDensityMetadata_dir,slideDensity_basename,currentDate,".rds"))
+    
+    
+    #slideSummaries
+    slideSummary <- slideDensityMetadata %>%
+      filter(mucosa_area_um2 > 200000) %>%
+      group_by(slide_name) %>%
+      summarize(
+        fragment_n = n(),
+        mucosa_area_um2_median = median(mucosa_area_um2, na.rm = TRUE),
+        mucosa_area_um2_min = min(mucosa_area_um2, na.rm = TRUE),
+        mucosa_area_um2_max = max(mucosa_area_um2, na.rm = TRUE),
+        mucosa_area_um2_range = mucosa_area_um2_max - mucosa_area_um2_min,
+        mucosa_area_um2_lower_quantile = quantile(mucosa_area_um2, 0.25, na.rm = TRUE),
+        mucosa_area_um2_upper_quantile = quantile(mucosa_area_um2, 0.75, na.rm = TRUE),
+        mucosa_area_um2_iqr = mucosa_area_um2_upper_quantile -
+        mucosa_area_um2_lower_quantile,
+        epithelium_area_um2_median = median(epithelium_area_um2, na.rm = TRUE),
+        epithelium_area_um2_min = min(epithelium_area_um2, na.rm = TRUE),
+        epithelium_area_um2_max = max(epithelium_area_um2, na.rm = TRUE),
+        epithelium_area_um2_range = epithelium_area_um2_max - epithelium_area_um2_min,
+        epithelium_area_um2_lower_quantile = quantile(epithelium_area_um2, 0.25, na.rm = TRUE),
+        epithelium_area_um2_upper_quantile = quantile(epithelium_area_um2, 0.75, na.rm = TRUE),
+        epithelium_area_um2_iqr = epithelium_area_um2_upper_quantile - epithelium_area_um2_lower_quantile,
+        lamina_propria_area_um2_median = median(lamina_propria_area_um2, na.rm = TRUE),
+        lamina_propria_area_um2_min = min(lamina_propria_area_um2, na.rm = TRUE),
+        lamina_propria_area_um2_max = max(lamina_propria_area_um2, na.rm = TRUE),
+        lamina_propria_area_um2_range = lamina_propria_area_um2_max - lamina_propria_area_um2_min,
+        lamina_propria_area_um2_lower_quantile = quantile(lamina_propria_area_um2, 0.25, na.rm = TRUE),
+        lamina_propria_area_um2_upper_quantile = quantile(lamina_propria_area_um2, 0.75, na.rm = TRUE),
+        lamina_propria_area_um2_iqr = lamina_propria_area_um2_upper_quantile - lamina_propria_area_um2_lower_quantile,
+        epithelium_lc_n_median = median(epithelium_lc_n, na.rm = TRUE),
+        epithelium_lc_n_min = min(epithelium_lc_n, na.rm = TRUE),
+        epithelium_lc_n_max = max(epithelium_lc_n, na.rm = TRUE),
+        epithelium_lc_n_range = epithelium_lc_n_max - epithelium_lc_n_min,
+        epithelium_lc_n_lower_quantile = quantile(epithelium_lc_n, 0.25, na.rm = TRUE),
+        epithelium_lc_n_upper_quantile = quantile(epithelium_lc_n, 0.75, na.rm = TRUE),
+        epithelium_lc_n_iqr = epithelium_lc_n_upper_quantile - epithelium_lc_n_lower_quantile,
+        lamina_propria_lc_n_median = median(lamina_propria_lc_n, na.rm = TRUE),
+        lamina_propria_lc_n_min = min(lamina_propria_lc_n, na.rm = TRUE),
+        lamina_propria_lc_n_max = max(lamina_propria_lc_n, na.rm = TRUE),
+        lamina_propria_lc_n_range = lamina_propria_lc_n_max - lamina_propria_lc_n_min,
+        lamina_propria_lc_n_lower_quantile = quantile(lamina_propria_lc_n, 0.25, na.rm = TRUE),
+        lamina_propria_lc_n_upper_quantile = quantile(lamina_propria_lc_n, 0.75, na.rm = TRUE),
+        lamina_propria_lc_n_iqr = lamina_propria_lc_n_upper_quantile - lamina_propria_lc_n_lower_quantile,
+        epithelium_lcDensity_1000um2_median = median(epithelium_lcDensity_1000um2, na.rm = TRUE),
+        epithelium_lcDensity_1000um2_min = min(epithelium_lcDensity_1000um2, na.rm = TRUE),
+        epithelium_lcDensity_1000um2_max = max(epithelium_lcDensity_1000um2, na.rm = TRUE),
+        epithelium_lcDensity_1000um2_range = epithelium_lcDensity_1000um2_max - epithelium_lcDensity_1000um2_min,
+        epithelium_lcDensity_1000um2_lower_quantile = quantile(epithelium_lcDensity_1000um2, 0.25, na.rm = TRUE),
+       epithelium_lcDensity_1000um2_upper_quantile = quantile(epithelium_lcDensity_1000um2, 0.75, na.rm = TRUE),
+        epithelium_lcDensity_1000um2_iqr = epithelium_lcDensity_1000um2_upper_quantile - epithelium_lcDensity_1000um2_lower_quantile,
+        lamina_propria_lcDensity_1000um2_median = median(lamina_propria_lcDensity_1000um2, na.rm = TRUE),
+        lamina_propria_lcDensity_1000um2_min = min(lamina_propria_lcDensity_1000um2, na.rm = TRUE),
+        lamina_propria_lcDensity_1000um2_max = max(lamina_propria_lcDensity_1000um2, na.rm = TRUE),
+        lamina_propria_lcDensity_1000um2_range = lamina_propria_lcDensity_1000um2_max - lamina_propria_lcDensity_1000um2_min,
+        lamina_propria_lcDensity_1000um2_lower_quantile = quantile(lamina_propria_lcDensity_1000um2, 0.25, na.rm = TRUE),
+        lamina_propria_lcDensity_1000um2_upper_quantile = quantile(lamina_propria_lcDensity_1000um2, 0.75, na.rm = TRUE),
+        lamina_propria_lcDensity_1000um2_iqr = lamina_propria_lcDensity_1000um2_upper_quantile - lamina_propria_lcDensity_1000um2_lower_quantile)
+    
+    saveRDS(slideSummary, paste0(slideSummaryMetadata_dir,slideSummary_basename,currentDate,".rds"))
+  }
+}
+```
+
+### Generate lymphocyte segmentation coordinates (quick)
+This chunk merges the raw Lc geometries (contains segmentation coordinates) with the lcMucosa point coordinates (contains all relevant metadata)
+```{r lcSeg}
+
+slideNames <- readRDS(paste0(top_dir,batch,"/output/mergeModels/all/slideNames.rds"))
+
+for (name in slideNames){
+  
+  matching_files_rawLcCoords <- list()
+  matching_files_lcMucosaCoords <- list()
+  
+  if(!any(sapply(list.files(lcSeg_dir), function(file_name) grepl(name, file_name)))){
+    
+    matching_files_rawLcCoords <- list.files(path = rawLcCoords_dir, pattern = paste0("^", name))
+    matching_files_lcMucosa<- list.files(path = lcMucosaCoords_dir, pattern = paste0("^", name))
+    
+    rawLcCoords_path <- character(0)
+    rawLcCoords <- NULL
+    lcMucosaPath<- character(0)
+    lcMucosaCoords <- NULL
+    rawLc_renamed <- NULL
+    lcSegCoords <- NULL
+     
+    if (length(matching_files_rawLcCoords) > 0 && length(matching_files_lcMucosa) > 0 ) {
+      
+      rawLcCoords_path <- file.path(rawLcCoords_dir, matching_files_rawLcCoords[1])
+      rawLcCoords <- readRDS(rawLcCoords_path)
+      lcMucosaPath<- file.path(lcMucosaCoords_dir, matching_files_lcMucosa[1])
+      lcMucosaCoords <- readRDS(lcMucosaPath) %>%
+        st_drop_geometry()
+      
+      #rename rawLc variables to match lcMucosa variables
+      rawLc_renamed <- rawLcCoords %>%
+        rename_at(vars(class_label:slide_name), function(x) paste0('lc_',x))
+    
+      #merge lcMucosa with rawLc coords
+      lcSegCoords <- merge(lcMucosaCoords, rawLc_renamed, by = intersect(names(lcMucosaCoords), names(rawLc_renamed)), all.x = TRUE)
+      
+      lcSegCoords <- st_as_sf(lcSegCoords)
+      
+      saveRDS(lcSegCoords, paste0(lcSeg_dir, name, "_lcSegCoords_", currentDate,".rds"))
+
+      
+    }
+  }
+}
+```

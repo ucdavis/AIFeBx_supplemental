@@ -1,0 +1,3525 @@
+---
+title: "lymphocyteValidation"
+author: "Wulcan"
+date: "2023-11-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Objective
+Validate ai-predictions of intraepithelial and lamina propria lymphocytes
+against reference standard comprised of "majority decision" from multiple annotators
+
+##Input
+- "pathologist_annotations" Coordinates for lymphocyte annotations by multipe annotators (custom json from aiforia)
+- "lcMucosa" - centroid coordinates with mucosal location (output from mergeModels)
+- "lcSeg" - polygon coordinates for lymphocyte nuclear outlines (output from mergeModels)
+- "validMucosa" - coordinates for mucosa outlines (output from mergeModels)
+- "slideNames" (output from mergeModels)
+
+##Output
+
+
+##Deviations
+- **Removed "mock_annotations"** Initial test annotations (by me and SK) are included in the pathologist_annotations files and needed to be filtered out.
+- **Renamed 9.60E+05 manually to 96e4** The slide_name 96e4 was autocorrected to scientific notation (9.60E+05) in excel prior to scanning and needed to be renamed
+- The format of slide  #yphx in mucosaLc is of a different format (requested later) - a column removed when defining intersection with roi (see "AI annotations" chunk" 
+
+## Issues
+- Prints are flipped vertical compared to original. This is due to image coordinates 0,0 being top left and and graphs starting bottom left. This only affects plots, the output coordinates still projects right when viewed in QuPath. To generate correct plots, use fix function below.
+
+- Density based clustering (later used to cluster individual pathologist annotations into candidate lymphocytes) requires an input distance threshold used to define clusters. This is challenging for our data since there is an expected overlap between the centers of annotations targeting different lymphocytes, and centers of annotations targeting the same lymphocyte. Maybe the overlap would have been smaller if annotators had been asked to annotate **centers** of lymphocytes with a small annotation tool, as opposed to **circles around** lymphocytes with a 7um2 tool (as used in this study). For this study no distance threshold is expected to perfectly sort "different lymphocytes" from "same lymphocytes" but the script below attends to identify an optimal threshold by analyzing the difference between "distance to closest annotation" when a pathologist annotation is compared to other pathologists annotation (expected to include both "same" and "other" lymphocytes, and the "distance to closest annotation" when compared only to their own annotations ("Expected to only include "other" lynmphocytes.) 
+
+```{r load libraries, message = F}
+#General data science packages
+library(tidyverse)
+library(purrr)
+library(broom)
+
+#Spatial data science packages
+library(sf) # library for working with geojson files
+Sys.setenv(OGR_GEOJSON_MAX_OBJ_SIZE = 0) # remove max size geojsons
+sf_use_s2(FALSE) #disables the spherical geometry package for sf
+library(dbscan) #for clustering pathologist annotations to candidate lymphocytes
+
+#File reading and writing packages
+library(jsonlite) # for reading json files (format of pathologists annotations)
+library(writexl)
+library(readxl)
+
+#Plot packages
+library(ggbeeswarm)
+library(reshape2)
+library(ggridges)
+library(RColorBrewer)
+library(grid) #to add legends to images
+```
+
+### Set batch name and directories
+```{r set batch name and directories}
+batch <- "test_set_AIFeBx_paper"
+
+top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/supplementary_data/" #jmwMacBook
+#top_dir <- "C:/Users/jmwulcan/Box/Projects/AI/paper/supplementary_data/" #jmwDell
+#top_dir <- "C:/Users/15303/Box/Projects/paper/supplementary_data/" #JMW lenovo
+
+#Set current date
+currentDate <- format(Sys.Date(), format = "%Y-%m-%d")
+
+inputDir_valCoords <- paste0(top_dir,batch, "/input/pathologist_annotations/layerData.json")
+inputDir_lcMucosa <-paste0(top_dir,batch,"/output/mergeModels/by_slide/lcMucosa/coordinates/")
+inputDir_lcSeg <-paste0(top_dir,batch,"/output/mergeModels/by_slide/lcSeg/coordinates/")
+inputDir_validMucosa <- paste0(top_dir,batch,"/output/mergeModels/by_slide/validMucosa/coordinates/") 
+inputDir_wsiAssessment <- paste0(top_dir,batch,"/output/wsiAssessment/wsi_quality_origin.rds")
+inputDir_wsiAssessment_summary <- paste0(top_dir,batch,"/output/wsiAssessment/wsi_assessment_summary.rds")
+inputDir_unequivocallyFalse <- paste0(top_dir,batch,"/input/unequivocally_falsePredictions/unequivocallyFalsePredictions.xlsx")
+
+outputDir_all <-  paste0(top_dir,batch,"/output/lymphocyteValidation/all/")
+outputDir_bySlide <- paste0(top_dir,batch, "/output/lymphocyteValidation/bySlide/")
+rawAnnotations_dir <- paste0(outputDir_bySlide,"rawAnnotations/")
+annotationsSfCoords_dir <- paste0(outputDir_bySlide,"sfAnnotations/coordinates/")
+boundingBoxCoords_dir <- paste0(outputDir_bySlide,"bbAnnotations/coordinates/")
+boundingBoxPlots_dir <- paste0(outputDir_bySlide,"bbAnnotations/plots/")
+rawRois_dir <- paste0(outputDir_bySlide, "rawRois/")
+roiAiforia_dir <- paste0(outputDir_bySlide,"roisAiforia/")
+
+lcMucosaRoiCoords_dir <-paste0(outputDir_bySlide,"lcMucosa_roi/coordinates/")
+lcSegRoiCoords_dir <- paste0(outputDir_bySlide,"lcSeg_roi/coordinates/" )
+validMucosaRoiCoords_dir <- paste0(outputDir_bySlide,"validMucosa_roi/coordinates/")
+predictionsCoords_dir <-  paste0(outputDir_bySlide,"predictions/coordinates/")
+predictionsPlots_dir <- paste0(outputDir_bySlide,"predictions/plots/")
+
+annotationsDistCoords_dir <-paste0(outputDir_bySlide,"annotationsDistCoord/") 
+distanceWithin_dir <- paste0(outputDir_bySlide,"distanceWithin/")
+
+annotationsAgree_dir <- paste0(outputDir_bySlide,"candidateLc/")
+                                   
+            
+
+supplementaryFigures_dir <- paste0(top_dir,batch,"/figures/supplementary/")
+mainFigures_dir <- paste0(top_dir,batch,"/figures/main/")  
+tables_dir <- paste0(top_dir,batch,"/tables//")  
+
+```
+
+#### Functions and palettes used in multiple graphs
+```{r for graphs}
+
+### Function to flip y coordinates for graphs (see issue above)
+
+#Prints are flipped vertical compared to original. This is due to image coordinates 0,0 being top left and and graphs starting bottom left. Can be fixed with a flipYcoord function, either in graoh (alternative 1) or by changning the geometry (alternative 2) by multiply y coordinates with -1:
+
+#Alternative 1 
+flipYcoord <- function(geom) {
+  sf::st_transform(geom, pipeline =
+                     "+proj=pipeline +step +proj=axisswap +order=1,-2", reverse = TRUE)
+}
+
+
+set3_colors <- brewer.pal(11, "Set3")
+#print(set3_colors)
+
+#Get and expand orange scale
+oranges_colors <- brewer.pal(9, "Oranges")
+oranges_colors_expanded <- colorRampPalette(oranges_colors)(20)
+#print(oranges_colors_expanded)
+
+#Get and expand blue scale
+blues_colors <- brewer.pal(9, "Blues")
+blues_colors_expanded <- colorRampPalette(blues_colors)(20)
+#print(blues_colors_expanded)
+
+#Get and expand green scale
+greens_colors <- brewer.pal(9, "Greens")
+greens_colors_expanded <- colorRampPalette(greens_colors)(20)
+#print(greens_colors_expanded)
+
+#Get and expand dark2
+dark2_colors <- brewer.pal(9, "Dark2")
+dark2_expanded <- colorRampPalette(dark2_colors)(9)
+#print(dark2_expanded)
+
+
+
+classLabel_palette <- c("intraepithelial_lymphocytes" = "#FA8533","lamina_propria_lymphocytes" =  "#3282Bd")
+
+prediction_palette <- c("Lamina propria" = "aliceblue", "Epithelium" = "beige", "Intraepithelial lymphocyte" = "#FA8533", "Lamina propria lymphocyte" = "#3282Bd")
+
+pathologist_palette <- c("p01" = "#8DD3C7", "p02" = "#FFFFB3", "p03" = "#BEBADA", "p04" = "#FB8072", "p05" = "#80B1D3", "p06" = "#FDB462", "p07" = "#B3DE69", "p08" = "#FCCDE5", "p09" = "#D9D9D9", "p10" = "#BC80BD", "p11" =  "#CCEBC5")
+
+
+distance_palette <- c("By other pathologist" = "pink", "By same pathologist" = "turquoise")
+
+
+
+class_contributors_palette <- c(
+                                "Intraepithelial n=1" = "#FDE0C2",
+                                "Intraepithelial n=2" = "#FDD6AF",
+                                "Intraepithelial n=3" = "#FDCC9C",
+                                "Intraepithelial n=4" = "#FDBE85",
+                                "Intraepithelial n=5" = "#FDAF6D",
+                                "Intraepithelial n=6" = "#FA8533",
+                                "Intraepithelial n=7" = "#EF6712",
+                                "Intraepithelial n=8" = "#C84201",
+                                "Intraepithelial n=9" = "#B33A02",
+                                "Intraepithelial n=10" = "#9F3303", 
+                                "Intraepithelial n=11" = "#7F2704",
+                                
+                                "Lamina propria n=1" = "#CDE0F1",
+                                "Lamina propria n=2" = "#B0D2E7",
+                                "Lamina propria n=3" =  "#8BBFDC" ,
+                                "Lamina propria n=4" = "#75B3D8",
+                                "Lamina propria n=5" =  "#62A8D2",
+                                "Lamina propria n=6" = "#3282BD",
+                                "Lamina propria n=7" = "#2474B6" ,
+                                "Lamina propria n=8" = "#1966AD",
+                                "Lamina propria n=9" = "#0E59A2",
+                                "Lamina propria n=10" = "#084B94",
+                                "Lamina propria n=11" = "#08306B")       
+   
+
+class_contributors_labels <- c(
+                               "Intraepithelial n=1" = "1",
+                                "Intraepithelial n=2" = "2",
+                                "Intraepithelial n=3" = "3",
+                                "Intraepithelial n=4" = "4",
+                                "Intraepithelial n=5" = "5",
+                                "Intraepithelial n=6" = "6",
+                                "Intraepithelial n=7" = "7",
+                                "Intraepithelial n=8" = "8",
+                                "Intraepithelial n=9" = "9",
+                                "Intraepithelial n=10" = "10", 
+                                "Intraepithelial n=11" = "11",
+                               
+                                "Lamina propria n=1" = "1",
+                                "Lamina propria n=2" = "2",
+                                "Lamina propria n=3" =  "3" ,
+                                "Lamina propria n=4" = "4",
+                                "Lamina propria n=5" =  "5",
+                                "Lamina propria n=6" = "6",
+                                "Lamina propria n=7" = "7" ,
+                                "Lamina propria n=8" = "8",
+                                "Lamina propria n=9" = "9",
+                                "Lamina propria n=10" = "10",
+                                "Lamina propria n=11" = "11")
+
+class_contributors_palette_2 <- c("Intraepithelial n=0" = "grey",
+                                "Intraepithelial n=1" = "#FDE0C2",
+                                "Intraepithelial n=2" = "#FDD6AF",
+                                "Intraepithelial n=3" = "#FDCC9C",
+                                "Intraepithelial n=4" = "#FDBE85",
+                                "Intraepithelial n=5" = "#FDAF6D",
+                                "Intraepithelial n=6" = "#FA8533",
+                                "Intraepithelial n=7" = "#EF6712",
+                                "Intraepithelial n=8" = "#C84201",
+                                "Intraepithelial n=9" = "#B33A02",
+                                "Intraepithelial n=10" = "#9F3303", 
+                                "Intraepithelial n=11" = "#7F2704",
+                                "Lamina propria n=0" = "grey",
+                                "Lamina propria n=1" = "#CDE0F1",
+                                "Lamina propria n=2" = "#B0D2E7",
+                                "Lamina propria n=3" =  "#8BBFDC" ,
+                                "Lamina propria n=4" = "#75B3D8",
+                                "Lamina propria n=5" =  "#62A8D2",
+                                "Lamina propria n=6" = "#3282BD",
+                                "Lamina propria n=7" = "#2474B6" ,
+                                "Lamina propria n=8" = "#1966AD",
+                                "Lamina propria n=9" = "#0E59A2",
+                                "Lamina propria n=10" = "#084B94",
+                                "Lamina propria n=11" = "#08306B")       
+   
+
+class_contributors_labels_2 <- c("Intraepithelial n=0" = "0",
+                               "Intraepithelial n=1" = "1",
+                                "Intraepithelial n=2" = "2",
+                                "Intraepithelial n=3" = "3",
+                                "Intraepithelial n=4" = "4",
+                                "Intraepithelial n=5" = "5",
+                                "Intraepithelial n=6" = "6",
+                                "Intraepithelial n=7" = "7",
+                                "Intraepithelial n=8" = "8",
+                                "Intraepithelial n=9" = "9",
+                                "Intraepithelial n=10" = "10", 
+                                "Intraepithelial n=11" = "11",
+                               "Lamina propria n=0" = "0",
+                                "Lamina propria n=1" = "1",
+                                "Lamina propria n=2" = "2",
+                                "Lamina propria n=3" =  "3" ,
+                                "Lamina propria n=4" = "4",
+                                "Lamina propria n=5" =  "5",
+                                "Lamina propria n=6" = "6",
+                                "Lamina propria n=7" = "7" ,
+                                "Lamina propria n=8" = "8",
+                                "Lamina propria n=9" = "9",
+                                "Lamina propria n=10" = "10",
+                                "Lamina propria n=11" = "11")
+
+
+
+
+issue_color_scale <- c("lymphocyte_model" =  "#8C510A", "mucosal_model" =    "#D8B365" , "both_lymphocyte_and_mucosal_model" = "#F6E8C3", "roi_border" = "#C7EAE5", "clustering" = "#5AB4AC" , "off_target_annotation" = 
+   "#01665E")
+
+issueLabel <- c( "off_target_annotation" = "Off target", "clustering" = "Clustering", "roi_border" = "Border", "mucosal_model" = "Mucosal model", "lymphocyte_model" = "Lymphocyte model" )
+
+
+quality_palette = c("none" = "#1B9E77", 
+                   "stain" =  "#C16610", 
+                   "focus" =  "#8D6B86", 
+                   "tissue" = "#BC4399", 
+                   "stain and focus" = "#A66753",  
+                   "stain and tissue" =  "#96A713" , 
+                   "stain and tissue" = "#D59D08", 
+                   "tissue and focus" =   "#9D7426", 
+                   "stain, tissue and focus" =  "#666666")
+
+
+quality_labels = c("none" = "Adequate quality", 
+                   "stain" = "Faded stain", 
+                   "focus" = "Out of focus", 
+                   "tissue" = "Crushed tissue", 
+                   "stain and focus" = "Faded stain &\nout of focus", 
+                   "stain and tissue" = "Faded stain &\ncrushed tissue", 
+                   "stain and tissue" = "Faded stain &\ncrushed tissue", 
+                   "tissue and focus" = "Crushed tissue &\nout of focus", 
+                   "stain, tissue and focus" = "Faded stain &\ncrushed tissue &\nout of focus")
+```
+
+##Parse individual pathologist annotations (quick)
+- Generates unique annotation Ids and pathologist Ids 
+- Calculates conversion factor (from pixel to um) per slide (IT VARIES!) and saves as rds:
+- Performs quality checks
+- Transforms units from pixel to um
+- Transforms to sf objects and saves coordinates for all (and by slide 
+
+####Input
+- Raw annotation data from aiforia: <input/pathologist_annotations/layerData.json> (pixels)
+- slideNames vector for quality control </output/mergeModels/all/slideNames.rds>
+
+#### Output
+-Raw annotations all slides <output/lymphocyteValidation/all/rawAnnotations.rds> (rds/pixels) 
+- Raw annotations by slide <output/lymphocyteValidation/bySlide/rawAnnotations/ (rds/pixels)>
+- Center coordinates for parsed annotations all slides rds /um (<output/lymphocyteValidation/all/annotations_sf_all.rds>) 
+- Center coordinates for parsed annotations by slide rds /um (<output/lymphocyteValidation/bySlide/sfAnnotations/coordinates/>)
+- Vector of pathologists  <output/lymphocyteValidation/all/pathNames.rds>
+- Vector of slide names <output/lymphocyteValidation/all/slideNames.rds>
+- Conversion factors (pixel to um ) by slide  <output/lymphocyteValidation/all/conversionFactors.rds>
+
+```{r parse individual pathologist annotations}
+
+layers <- fromJSON(inputDir_valCoords)
+slideNames_check <- readRDS(paste0(top_dir,batch,"/output/mergeModels/all/slideNames.rds"))
+
+#Remove mock pathologists and add unique pathologist id:s for each pathologist
+
+#There are annotator Ids included in the aiforia files that weren't actual annotators (mine and SKs test annotations), I manually checked which they were and removed them 
+
+mock_owners<- c("8652e03f-2b2a-469d-be85-bce56ea8a998", "2a597651-95e0-45c1-b7b4-9ccd623de1b7")
+
+annotations <- layers$layers$annotations[[1]] %>%
+  filter(!(ownerId %in% mock_owners)) %>% #removes "mock" annotations (see deviations)
+  mutate(slideName = ifelse(slideName == "9.60E+05", "96e4", slideName)) %>% #see deviations
+  #add variable "pathologist" (P1 etc) to use instead of unique owner IDs 
+  mutate(pathologist = formatC(dense_rank(ownerId), width = 2, format = 'd', flag = "0")) %>%
+  mutate(pathologist = paste0("p", pathologist)) 
+
+#Add unique annotations id:s for each annotation
+annotations$annotationId <- sprintf("A%06d", 1:nrow(annotations))
+
+#Generate vector of pathologist names and save as rds
+pathNames <- unique(annotations$pathologist)
+numericPart<- as.numeric(sub("p", "", pathNames))
+pathNames <- pathNames[order(numericPart)]
+saveRDS(pathNames, paste0(outputDir_all,"pathNames.rds"))
+
+
+#Quality checks
+
+#Check that all slides in test set have validation annotations
+slideNames <- unique(annotations$slideName)
+
+# Check if all elements of slideNames are present in slideNames_check
+all_included <- all(slideNames %in% slideNames_check)
+
+if(all_included) {
+  print("All test slides have annotations.")
+} else {
+  print("Not all test slides have annotations.")
+}
+
+#Save slideNames
+saveRDS(slideNames, paste0(outputDir_all, "slideNames.rds"))
+
+#Check for absent  slide -pathologist combinations (a pathologist that possibly missed a slide)
+all_combinations <- expand.grid(
+  slideName = slideNames, 
+  pathologist = pathNames
+)
+missing_combinations <- anti_join(all_combinations, annotations, by = c("slideName", "pathologist"))
+
+# Check if there are any missing combinations
+if (nrow(missing_combinations) == 0) {
+  print("All test slides have annotations from all pathologists.")
+} else {
+  # If there are missing combinations, report them
+  for (i in 1:nrow(missing_combinations)) {
+    slide <- missing_combinations[i, "slideName"]
+    pathologist <- missing_combinations[i, "pathologist"]
+    print(paste("Slide", slide, "lacks annotations from pathologist", pathologist))
+  }
+}
+
+
+
+#Split by slide and save as separate files
+
+#Split raw Annotations by slideName
+annotations_bySlide <- split(annotations, f = annotations$slideName)
+
+#Save raw annotations by slide name (if it doesn't already exist)
+for (name in slideNames){
+  if(!any(sapply(list.files(rawAnnotations_dir), function(file_name) grepl(name, file_name)))){
+    rawAnnotations <- annotations_bySlide[[name]]
+    saveRDS(rawAnnotations, paste0(rawAnnotations_dir,name,"_raw_annotations_",currentDate,".rds"))
+  }
+}
+
+#The annotation coordinates from aiforia are in pixels, but the ai-output coordinates are in um. The conversion factor can vary by slide. convert annotations to um and sf object
+
+conversion_factors <- list()
+
+for (name in slideNames){
+  if(!any(sapply(list.files(annotationsSfCoords_dir), function(file_name) grepl(name, file_name)))){
+    
+    matching_files_rawAnnotations <-  list.files(path = rawAnnotations_dir, pattern = paste0("^", name))
+    
+    if(length(matching_files_rawAnnotations) > 0){
+      rawAnnotations <- readRDS(file.path(rawAnnotations_dir, matching_files_rawAnnotations[1]))
+      
+      #Convert coords to um (radius lc aiforia website/ radius set)
+      conversion_factor <- 3.5 / rawAnnotations$ellipse$rx[1] #micrometer per pixel
+      conversion_factors[[name]] <- conversion_factor
+ 
+      ellipse_um <- rawAnnotations$ellipse %>%
+        mutate( 
+          x = x * conversion_factor,
+          y = y *conversion_factor, 
+          rx = rx * conversion_factor, 
+          ry = ry *conversion_factor
+          ) %>%
+        select(-rx, -ry)
+      
+      #Transform to sf object
+      annotations_sf <- st_as_sf(ellipse_um, coords = c("x", "y"))
+      
+      #Add attributes to sf object
+      annotations_sf$slideName <- rawAnnotations$slideName
+      annotations_sf$annotationId <- rawAnnotations$annotationId
+      annotations_sf$classLabel<- rawAnnotations$classLabel
+      annotations_sf$pathologist <- rawAnnotations$pathologist
+      annotations_sf$is_Removed <- rawAnnotations$isRemoved
+      annotations_sf$is_validationAnnotation <- rawAnnotations$isValidationAnnotation
+      
+      #Filter on present annotations and validation annotations
+      annotations_sf <- annotations_sf %>%
+        filter(is_Removed == FALSE) %>%
+        filter(is_validationAnnotation == TRUE) %>%
+        select(-is_Removed, - is_validationAnnotation)
+      
+      #remove temporary object
+      rm("ellipse_um")
+      
+      #Check for and remove duplicate annotations (same pathologist, classLabel, slide and geometry)
+      
+      annotations_sf <- annotations_sf %>%
+        group_by(slideName, classLabel, pathologist) %>%
+        distinct(geometry, .keep_all = TRUE)
+      
+      saveRDS(annotations_sf, paste0(annotationsSfCoords_dir,name, "_annotationsSfCoords_",currentDate,".rds"))
+      
+      
+    }
+    
+    
+  }
+}
+
+saveRDS(conversion_factors, paste0(outputDir_all,"conversionFactors.rds"))
+
+#Generate a frame with all annotations
+annotations_sf_all <- NULL
+for (name in slideNames){ 
+  #read in sf_annotations by slide
+  matching_files_annotationsSfCoords <- list.files(path = annotationsSfCoords_dir, pattern = paste0("^", name))
+  
+  annotationsSfCoordsPath <- character(0)
+  annotationsSfCoords <- NULL
+  
+  if(length(matching_files_annotationsSfCoords) > 0) {
+    annotationsSfCoordsPath <- file.path(annotationsSfCoords_dir, matching_files_annotationsSfCoords[1])
+    annotationsSfCoords <- readRDS(annotationsSfCoordsPath)
+    annotations_sf_all <- rbind(annotations_sf_all, annotationsSfCoords)
+    
+    }
+}
+
+
+saveRDS(annotations_sf_all, paste0(outputDir_all,"annotations_sf_all.rds"))
+```
+
+### Read rois (quick)
+- Parses validation roi from aiforia (transforms to um and sf-objects)
+#### Input
+- Raw Rois from aiforia <input/pathologist_annotations/layerData.json> (pixels)
+- slideNames vector </output/lymphocyteValidation/all/slideNames.rds>
+- conversion_factors </output/lymphocyteValidation/all/coversionFactors>
+#### Output: 
+- Raw rois (rds/pixels) by slide <output/lymphocyteValidation/bySlide/rawRois> (.rds / pixels)
+- Parsed rois (rds/um) <output/lymphocyteValidation/bySlide/roisAiforia> (.rds /um)
+
+```{r read rois}
+layers <- fromJSON(inputDir_valCoords)
+slideNames <- readRDS(paste0(top_dir,batch,"/output/lymphocyteValidation/all/slideNames.rds"))
+conversion_factor <- readRDS(paste0(outputDir_all,"conversionFactors.rds"))
+
+rois <- layers$layers$regions[[1]]
+
+
+#Fix 9.6E 05 slideName
+rois <- rois %>%
+  mutate(slideName = ifelse(slideName == "9.60E+05", "96e4", slideName))
+
+rois_bySlide <- split(rois, f = rois$slideName)
+
+for (name in slideNames){
+  if(!any(sapply(list.files(rawRois_dir), function(file_name) grepl(name, file_name)))){
+    rawRoi <- rois_bySlide[[name]]
+    saveRDS(rawRoi, paste0(rawRois_dir,name,"_rawRoi_",currentDate,".rds"))
+  }
+}
+
+for (name in slideNames){
+  if(!any(sapply(list.files(roiAiforia_dir), function(file_name) grepl(name, file_name)))){
+    
+     
+    matching_files_rawRois <-  list.files(path = rawRois_dir, pattern = paste0("^", name))
+    
+    if(length(matching_files_rawRois) > 0){
+      rawRoi <- readRDS(file.path(rawRois_dir, matching_files_rawRois[1]))
+      
+      conversion_factor <- conversion_factors[[name]]
+      
+      coordinates <- rawRoi$Coordinates[[1]] %>%
+        mutate(x = x * conversion_factor,
+               y = y * conversion_factor)
+      
+      roi_sf_points <- st_as_sf(coordinates, coords = c("x", "y")) %>%
+        st_union()
+      geometry<- st_convex_hull(roi_sf_points)
+      
+      roi_sf <- st_sf(
+        slideName = rawRoi$slideName,
+        geometry = geometry
+      )
+      
+       
+      
+      saveRDS(roi_sf, paste0(roiAiforia_dir,name, "_roi_",currentDate,".rds"))
+    }
+  }
+}
+
+```
+
+### AI predictions rois (slow)
+ Reads in ai-prediction for **lymphocyte centroids** and **lymphocyte outlines** and **mucosa**  (rds/um); crops by intersection with rois, adds unique predictions Ids, calculates merged confidence, generates plots
+#### Input
+- Lymphocyte predictions rds/um (center coordinates) <output/mergeModels/by_slide/lcMucosa/coordinates/> (rds/um) 
+- Lymphocyte predictions rds/um (nuclear outlines) <output/mergeModels/by_slide/lcSeg/coordinates/>
+- Mucosa predictions rds/um <output/mergeModels/by_slide/validMucosa/coordinates/> (for plots)
+- Parsed rois (from chunk "read rois") rds/um <output/lymphocyteValidation/bySlide/roisAiforia> 
+- slideNames vector </output/lymphocyteValidation/all/slideNames.rds>
+#### Output
+- Lymphocyte predictions that overlap with rois (center coordinates) <output/lymphocyteValidation/bySlide/lcMucosa_roi/coordinates/>
+- Lymphocyte predictions that overlap with rois (nuclear outline) <output/lymphocyteValidation/bySlide/lcSeg_roi/coordinates/>
+- Lymphocyte predictions that overlap with rois with unique Ids and confidence (all slides) <output/lymphocyteValidation/all/predictionsAll.rds> 
+- Lymphocyte predictions that overlap with rois with unique Ids and confidence by slide <output/lymphocyteValidation/bySlide/predictions/coordinates/>
+- Mucosa predictions that overlap with rois  by slide < output/lymphocyteValidation/bySlide/validMucosa_roi/coordinates/> 
+- Lymphocyte and Mucosa prediction plots by slide (output/lymphocyteValidation/bySlide/predictions/plots/)
+
+```{r AI predictions}
+slideNames <- readRDS(paste0(top_dir,batch,"/output/lymphocyteValidation/all/slideNames.rds"))
+
+# read in lcMucosa and define intersection with rois
+
+for (name in slideNames){
+  
+  matching_files_lcMucosa <- list()
+  matching_files_rois <- list
+  matching_files_lcSeg <- list()
+  
+  #Only proceed if outputfile absent
+  
+  if(!any(sapply(list.files(lcMucosaRoiCoords_dir), function(file_name) grepl(name, file_name)))){
+    
+  
+    #Generate lcMucosaRoi coordinate file (overlapping lcMucosa with coordinates) if not already present
+    
+    matching_files_lcMucosa <- list.files(path = inputDir_lcMucosa, pattern = paste0("^", name))
+    matching_files_rois <- list.files(path = roiAiforia_dir, pattern = paste0("^", name))
+    matching_files_lcSeg <- list.files(path = inputDir_lcSeg, pattern = paste0("^", name))
+    
+    
+    lcMucosaPath <- NULL
+    lcMucosa <- NULL
+    roiPath <- NULL
+    roi <- NULL
+    lcMucosaRoiCoords <- NULL
+    lcSegPath <- NULL
+    lcSeg <- NULL
+    lcSegRoiCoords <- NULL
+    
+    
+    if(length(matching_files_lcMucosa) > 0 && length(matching_files_rois) > 0 && length(matching_files_lcSeg) >0) {
+      
+      lcMucosaPath <- file.path(inputDir_lcMucosa,matching_files_lcMucosa[1])
+      lcMucosa <- readRDS(lcMucosaPath)
+      roiPath <- file.path(roiAiforia_dir,matching_files_rois[1])
+      roi <- readRDS(roiPath)
+      
+      lcMucosaRoiCoords <- st_intersection(lcMucosa, roi)
+      if(!("mucosa_slide_name" %in% colnames(lcMucosaRoiCoords))){
+        lcMucosaRoiCoords <- lcMucosaRoiCoords %>%
+          mutate(mucosa_slide_name = lc_slide_name)
+      }
+      
+      # reads in lymphocyte nuclear segmentation masks and filters out roi overlapping
+      lc_id_roi <- lcMucosaRoiCoords$lc_id
+      
+      lcSegPath <- file.path(inputDir_lcSeg,matching_files_lcSeg[1])
+      lcSeg <- readRDS(lcSegPath)
+      if(!("mucosa_slide_name" %in% colnames(lcSeg))){
+        lcSeg <- lcSeg %>%
+          mutate(mucosa_slide_name = lc_slide_name) 
+      }
+      
+      lcSeg_roi <- lcSeg[lcSeg$lc_id %in% lc_id_roi, ] %>%
+        mutate(
+          mucosa_class_label = case_when(
+            mucosa_class_label == "Epithelium" ~ "Intraepithelial lymphocyte",
+            mucosa_class_label == "Lamina propria" ~ "Lamina propria lymphocyte",
+            TRUE ~ mucosa_class_label
+            )
+        )
+      
+      saveRDS(lcMucosaRoiCoords, paste0(lcMucosaRoiCoords_dir,name,"_lcMucosaRoi_",currentDate,".rds"))
+      saveRDS(lcSeg_roi, paste0(lcSegRoiCoords_dir,name,"_lc_segRoi_",currentDate,".rds"))
+    }
+  }
+}
+
+# read in mucosa prediction and define intersection with rois
+
+for (name in slideNames){
+  
+  matching_files_validMucosa <- list()
+  matching_files_rois <- list
+  
+  #Only proceed if outputfile absent
+  
+  if(!any(sapply(list.files(validMucosaRoiCoords_dir), function(file_name) grepl(name, file_name)))){
+    
+  
+    #Generate  coordinate file (overlapping lcMucosa with coordinates) if not already present
+    
+    matching_files_validMucosa <- list.files(path = inputDir_validMucosa, pattern = paste0("^", name))
+    
+    matching_files_rois <- list.files(path = roiAiforia_dir, pattern = paste0("^", name))
+    
+    validMucosaPath <- NULL
+    validMucosa<- NULL
+    roiPath <- NULL
+    roi <- NULL
+    validMucosaRoiCoords <- NULL
+    
+    
+    if(length(matching_files_validMucosa) > 0 && length(matching_files_rois) > 0 ) {
+      
+      validMucosaPath <- file.path(inputDir_validMucosa,matching_files_validMucosa[1])
+      validMucosa <- readRDS(validMucosaPath)
+      roiPath <- file.path(roiAiforia_dir,matching_files_rois[1])
+      roi <- readRDS(roiPath)
+      
+      validMucosaRoiCoords <- st_intersection(validMucosa, roi)
+      saveRDS(validMucosaRoiCoords, paste0(validMucosaRoiCoords_dir,name,"_validMucosaRoi_",currentDate,".rds"))
+    }
+  }
+}
+
+#Generate predictions - generate sf frame with AI prediction and plot
+
+lcMucosaRoiAll <- NULL
+
+for (name in slideNames){
+  
+  matching_files_lcMucosaRoiCoords <- list()
+  
+  if(!any(sapply(list.files(predictionsCoords_dir), function(file_name) grepl(name, file_name)))){
+    
+    matching_files_lcMucosaRoiCoords <- list.files(path = lcMucosaRoiCoords_dir, pattern = paste0("^", name))
+    
+    lcMucosaRoiCoordsPath <- NULL
+    lcMucosaRoiCoords <- NULL
+    
+    if (length(matching_files_lcMucosaRoiCoords) > 0) {
+      
+      lcMucosaRoiCoordsPath<- file.path(lcMucosaRoiCoords_dir, matching_files_lcMucosaRoiCoords[1])
+      lcMucosaRoiCoords <- readRDS(lcMucosaRoiCoordsPath)
+      
+      #yphx is of a different format (requested later) remove coln "mucosa_run_id" before merging
+      lcMucosaRoiCoords <- lcMucosaRoiCoords[, !colnames(lcMucosaRoiCoords)%in% "mucosa_run_id", drop = FALSE]
+      
+      lcMucosaRoiAll <- rbind(lcMucosaRoiAll, lcMucosaRoiCoords)
+    }
+    saveRDS(lcMucosaRoiAll, paste0(outputDir_all, "lcMucosaRoiAll.rds"))
+  }
+}
+
+
+lcMucosaRoiAll <- readRDS(paste0(outputDir_all, "lcMucosaRoiAll.rds"))
+
+
+#Generate frame with all ai-annotations, given unique names and with recalculated confidence
+predictionAll <- lcMucosaRoiAll %>%
+  mutate(predictionId = sprintf("PR%04d", row_number()),
+               classLabel = if_else(mucosa_class_label == 'Epithelium', 'intraepithelial_lymphocytes', 'lamina_propria_lymphocytes'),
+         confidence = (mucosa_confidence_percentage/100) * (lc_confidence_percentage/100),
+         confidence_lc = lc_confidence_percentage/100,
+         confidence_mucosa = mucosa_confidence_percentage / 100
+         
+               ) %>%
+        select(slideName, predictionId, lc_id, classLabel, confidence, confidence_lc, confidence_mucosa, geometry)
+
+#Save the all frame
+
+saveRDS(predictionAll, paste0(outputDir_all,"predictionsAll.rds"))
+
+#Save predictions by slide and generate plots
+
+for (name in slideNames){
+  
+  
+  if(!any(sapply(list.files(predictionsCoords_dir), function(file_name) grepl(name, file_name)))){
+    
+    predictionsAll <- readRDS(paste0(outputDir_all, "predictionsAll.rds"))
+    predictionCoords <- predictionsAll %>% filter(slideName == name)
+    saveRDS(predictionCoords, paste0(predictionsCoords_dir,name,"_prediction_",currentDate,".rds"))
+    }
+    
+  #Plot prediction
+  
+  matching_files_validMucosaRoi <- list()
+  matching_files_lcSeg <- list()
+  matching_files_prediction <- list()
+  
+  #Only proceed if plot is not already done
+  if(!any(sapply(list.files(predictionsPlots_dir), function(file_name) grepl(name, file_name)))){
+    
+    matching_files_validMucosaRoi <- list.files(path = validMucosaRoiCoords_dir, pattern = paste0("^", name))
+    
+    matching_files_lcSeg <- list.files(path = lcSegRoiCoords_dir, pattern = paste0("^", name))
+    
+    matching_files_prediction <- list.files(path = predictionsCoords_dir, pattern = paste0("^", name))
+    
+    validMucosaRoiPath <- NULL
+    validMucosaRoi <- NULL
+    lcSegRoiCoordsPath <- NULL
+    lcSegRoiCoords <- NULL
+    predictionsCoordsPath <- NULL
+    predictionCoords <- NULL
+    
+    if (length(matching_files_validMucosaRoi) > 0 && length(matching_files_lcSeg) >0 && length(matching_files_prediction) > 0) {
+      
+      validMucosaRoiPath<- file.path(validMucosaRoiCoords_dir, matching_files_validMucosaRoi[1])
+      validMucosaRoi <- readRDS(validMucosaRoiPath)
+      
+      lcSegRoiCoordsPath<- file.path(lcSegRoiCoords_dir, matching_files_lcSeg[1])
+      lcSegRoiCoords<- readRDS(lcSegRoiCoordsPath)
+      
+      predictionsCoordsPath <- file.path(predictionsCoords_dir, matching_files_prediction[1])
+      predictionCoords <- readRDS(predictionsCoordsPath)
+      
+       png(paste0(predictionsPlots_dir,name,"_prediction_",currentDate,".png"), width = 1920, height = 1080)
+       
+       combined_plot <- ggplot() +
+         
+         geom_sf(data = flipYcoord(validMucosaRoi), aes(fill = mucosa_class_label)) + scale_fill_manual(values = prediction_palette) +
+         
+         geom_sf(data = flipYcoord(lcSegRoiCoords), aes(fill = mucosa_class_label)) +
+         scale_fill_manual(values = prediction_palette) +
+         
+         geom_sf(data = flipYcoord(predictionCoords), aes(fill = classLabel)) +
+         scale_fill_manual(values = prediction_palette) +
+         
+         theme_bw() +
+         
+         labs(fill = NULL)
+       
+       print(combined_plot)
+       dev.off()
+       
+    }
+  }
+}
+
+```
+
+### Individual pathologist annotations (quick)
+Read in and plot individual pathologists annotations (centers and 7 um bounding boxes)
+#### Input:
+- Individual pathologist annotations center coordinates <output/lymphocyteValidation/bySlide/sfAnnotations/coordinates/>
+- Mucosa predictions that overlap with rois  by slide < output/lymphocyteValidation/bySlide/validMucosa_roi/coordinates/> 
+- Lymphocyte predictions that overlap with rois (nuclear outline) <output/lymphocyteValidation/bySlide/lcSeg_roi/coordinates/>
+- slideNames vector </output/lymphocyteValidation/all/slideNames.rds>
+#### Output: 
+- Individual pathologist annotations (bounding boxes) by slide  (<output/lymphocyteValidation/bySlide/bbAnnotations/plots/>) (<output/lymphocyteValidation/bySlide/bbAnnotations/coordinates/>) 
+- Plots of Individual pathologist annotations (bounding boxes and centers) by slide (with ai prediction overlays)
+
+```{r indivdual pathologist annotations}
+slideNames <- readRDS(paste0(top_dir,batch,"/output/lymphocyteValidation/all/slideNames.rds"))
+
+#Generate coordinates for 7um2 bounding boxes around center points for annotations and plot 
+for (name in slideNames){ 
+  
+  #Generate bounding boxes aroung lymphocyte centers to match annotations
+  matching_files_annotationsSfCoords <- list()
+  
+  if(!any(sapply(list.files(boundingBoxCoords_dir), function(file_name) grepl(name, file_name)))){
+    matching_files_annotationsSfCoords <- list.files(path = annotationsSfCoords_dir, pattern = paste0("^", name))
+    
+    annotationsSfCoordsPath <- character(0)
+    annotationsSfCoords <- NULL
+    boundingBoxCoords <- NULL
+  
+    if(length(matching_files_annotationsSfCoords) > 0) {
+      annotationsSfCoordsPath <- file.path(annotationsSfCoords_dir, matching_files_annotationsSfCoords[1])
+      annotationsSfCoords <- readRDS(annotationsSfCoordsPath)
+      boundingBoxCoords <- st_buffer(annotationsSfCoords, dist = 3.5)
+      saveRDS(boundingBoxCoords, paste0(boundingBoxCoords_dir,name,"_bbAnnotations_",currentDate,".rds"))
+    }
+  }
+  
+  #Plot individual annotations
+  
+  matching_files_validMucosaRoi <- list()
+  matching_files_lcSegRoi <- list()
+  matching_files_sfAnnotations <- list()
+  matching_files_bbAnnotations <- list()
+  
+  
+  #Only proceed if plot is not already done
+  if(!any(sapply(list.files(boundingBoxPlots_dir), function(file_name) grepl(name, file_name)))){
+    
+    matching_files_validMucosaRoi <- list.files(path = validMucosaRoiCoords_dir, pattern = paste0("^", name))
+    
+    matching_files_lcSegRoi<- list.files(path = lcSegRoiCoords_dir, pattern = paste0("^", name))
+    
+    matching_files_sfAnnotations <- list.files(path = annotationsSfCoords_dir, pattern = paste0("^", name))
+    
+    matching_files_bbAnnotations <- list.files(path = boundingBoxCoords_dir, pattern = paste0("^", name))
+    
+    validMucosaRoiPath <- NULL
+    validMucosaRoi <- NULL
+    lcSegRoiCoordsPath <- NULL
+    lcSegRoiCoords <- NULL
+    sfAnnotationsCoordsPath <- NULL
+    sfAnnotationsCoords <- NULL
+    bbAnnotationsCoordsPath <- NULL
+    bbAnnotationsCoords <- NULL
+    
+    if (length(matching_files_validMucosaRoi) > 0 && length(matching_files_lcSegRoi) >0 && length(matching_files_sfAnnotations) > 0 && length(matching_files_bbAnnotations) > 0) {
+      
+      validMucosaRoiPath<- file.path(validMucosaRoiCoords_dir, matching_files_validMucosaRoi[1])
+      validMucosaRoi <- readRDS(validMucosaRoiPath)
+      
+      lcSegRoiCoordsPath <- file.path(lcSegRoiCoords_dir, matching_files_lcSegRoi[1])
+      lcSegRoiCoords<- readRDS(lcSegRoiCoordsPath)
+      
+      sfAnnotationsCoordsPath <- file.path(annotationsSfCoords_dir, matching_files_sfAnnotations[1])
+      sfAnnotationsCoords <- readRDS(sfAnnotationsCoordsPath)
+      
+      bbAnnotationsCoordsPath <- file.path(boundingBoxCoords_dir, matching_files_bbAnnotations[1])
+      bbAnnotationsCoords <- readRDS(bbAnnotationsCoordsPath)
+      
+       png(paste0(boundingBoxPlots_dir,name,"_annotations_",currentDate,".png"), width = 1920, height = 1080)
+       
+       combined_plot <- ggplot() +
+         
+         geom_sf(data = flipYcoord(validMucosaRoi), aes(fill = mucosa_class_label)) + scale_fill_manual(values = prediction_palette, name = "AI predictions") +
+         
+         geom_sf(data = flipYcoord(bbAnnotationsCoords), aes(color = pathologist), alpha = 0, lwd = 1.5) +
+         scale_color_manual(values = pathologist_palette, name = "Pathologist") +
+         
+         #geom_sf(data = flipYcoord(lcSegRoiCoords), aes(fill = prediction_palette)) +
+         
+         geom_sf(data = flipYcoord(sfAnnotationsCoords), aes(color = pathologist)) +
+         theme_bw()
+       
+       print(combined_plot)
+       dev.off()
+    }
+    
+  }
+}
+
+```
+
+###Candidate lymphocytes (slow)
+Generate candidate lymphocytes through density based clustering (dbScan) using a range of distance thresholds 
+#### Input
+- Individual annotations by slide (<output/lymphocyteValidation/bySlide/annotationsDistCoord/>) 
+- Mucosa predictions that overlap with rois by slide < output/lymphocyteValidation/bySlide/validMucosa_roi/coordinates/> 
+- Lymphocyte predictions that overlap with rois (nuclear outline) <output/lymphocyteValidation/bySlide/lcSeg_roi/coordinates/>
+
+#### Output
+- List of candidate lymphocytes for different distance thresholds </output/lymphocyteValidation/all/candidateLc_allTh.rds> 
+- Candidate lymphocyte center coordinates by threshold <output/lymphocyteValidation/bySlide/candidateLc/<threshold>/coordinates">
+- Candidate lymphocytes bounding boxes by threshold <output/lymphocyteValidation/bySlide/candidateLc/<threshold>/buffers"> 
+- Plots of candidate lymphocytes (bounding boxes), and overlaid individual pathologist annotations (centers) and AI muucosa and lymphocyte outline predictions by slide <output/lymphocyteValidation/bySlide/candidateLc/<threshold>/plots"
+
+```{r generate candidate lymphocytes}
+
+set.seed(123) #Did not do this in original run, DBscan can theoretically vary between runs
+
+slideNames <- readRDS(paste0(top_dir,batch,"/output/lymphocyteValidation/all/slideNames.rds"))
+
+#Generate a vector of distance thresholds to explore (based on plots in previous chunk)
+thresholds <- seq(0.75, 5, by = 0.25)
+class_labels <- c("intraepithelial_lymphocytes", "lamina_propria_lymphocytes")
+
+#This loop takes a while to run, don't run it if you already have the output file
+
+if (!file.exists(paste0(outputDir_all, "candidateLc_allTh.rds"))) {
+  
+  annotationsSf<- NULL
+  referencesAllThresholds <- NULL
+  
+  for (threshold in thresholds){
+    referenceAllSlides <- NULL
+    
+    for (name in slideNames){
+      
+      #read in mucosa (for plots)
+      matching_files_validMucosaRoi <- list.files(path = validMucosaRoiCoords_dir, pattern = paste0("^", name))
+      
+      validMucosaRoiCoords <- readRDS(file.path(validMucosaRoiCoords_dir,matching_files_validMucosaRoi[1]))
+      
+      #Read in annotations coordinates
+      matching_files_annotationsSf <- list.files(path = annotationsSfCoords_dir, pattern = paste0("^", name))
+      
+      if(length(matching_files_annotationsSf) > 0){
+        
+        annotationsSf<- readRDS(file.path(annotationsSfCoords_dir, matching_files_annotationsSf[1]))
+        
+        clusters_slide <- NULL
+        
+        for (label in class_labels){
+          #Filter coordinates on classlabel
+          annotationLabel <- annotationsSf%>% filter(classLabel == label)
+          
+          if (nrow(annotationLabel) > 0){
+            #Extract geometry
+            annotationLabelCoords <- st_coordinates(annotationLabel$geometry)
+            
+            #Run DBscan (density based clustering)
+            dbscan_result <- dbscan(annotationLabelCoords, eps = threshold, minPts = 1)
+            
+            #Reunite with original data
+            annotationLabelCluster <- cbind(annotationLabel, dbscan_result$cluster)
+            
+            #Create summary frame for cluster
+            cluster_summary <- annotationLabelCluster %>%
+              
+              #Variables to group by (slideName and classlabel are all the same but I want to keep them)
+              
+              group_by(slideName, classLabel,dbscan_result.cluster) %>%
+              
+              #Generate vectors of included annotations
+              summarize(
+                component_annotations = list(annotationId),
+                pathologists = list(pathologist),
+                
+                #Generates new, combined geometry
+                geometry = list(st_union(geometry))) %>%
+              
+              ungroup() %>%
+              
+              #Check which clusters contain more then one from each pathologist
+              mutate(double_assignments = lapply(pathologists, function(path_list){
+                dup_pathologists <- unique(path_list[duplicated(path_list)])
+                
+                if(length(dup_pathologists) > 0) {
+                  dup_pathologists
+                  } else {
+                    NA
+                    }
+                }))
+            
+            #Deal with double assignments
+            annotations_to_remove <- list()
+            cluster_indices_to_update <-list()
+            pathologists_to_remove <- list()
+            keep_ids <- list()
+            
+            # iterate through each cluster in the cluster summary
+            for (i in seq_len(nrow(cluster_summary))){
+              
+              #For the observations that has double assignments  
+              if( any(!is.na(cluster_summary$double_assignments[[i]])) && length(cluster_summary$double_assignments[[i]]) > 0){
+                problem_observation <- cluster_summary[i, ]
+                
+                #Iterate through the affected pathologists
+                for(pathologist in problem_observation$double_assignments[[1]]){
+                  
+                  #Find the indices for the duplicated pathologist
+                  pathologist_indices <- which(problem_observation$pathologists[[1]] == pathologist)
+                  problemIds <- problem_observation$component_annotations[[1]][pathologist_indices]
+                  
+                  #Define the centroid for the problem observation
+                  centroid <- st_centroid(problem_observation$geometry)
+                  
+                  # Find the index closest to the centroid (to keep)
+                  
+                  #initiate empty list to keep track of each instance distance to cluster center
+                  distances <- list()
+                  
+                  for (id in problemIds){
+                    #Find the annotationId for the index
+                    annotation <- id
+                    
+                    #Extract the original annotation (to get the coordinates)
+                    original_annotation <- annotationLabelCluster %>% filter(annotationId == annotation)
+                    #Extract the original coordinates
+                    original_geometry <- original_annotation$geometry
+                    
+                    #Check the distance to the cluster centroid
+                    distance_to_centroid <- st_distance(original_geometry, centroid)
+                    
+                    #Add distance for each index to a distance vector
+                    distances <- c(distances, distance_to_centroid)
+                    } #problem index level
+                  
+                  #Identify pathologist index for the annotation to keep in the cluster
+                  keep_index <- which.min(distances)
+                  keep_id <- problemIds[[keep_index]]
+                  keep_ids <- c(keep_ids, keep_id)
+                  
+                  #Handle indexes not to keep (to other cluster or new cluster)
+                  for (id in problemIds){
+                    if (id != keep_id){
+                      #extract annotation id
+                      annotation <- id 
+                      
+                      #Save info on items to remove
+                      cluster_index_to_update <- i
+                      cluster_indices_to_update <- c(cluster_indices_to_update, cluster_index_to_update)
+                      annotations_to_remove <- c(annotations_to_remove, annotation)
+                      pathologists_to_remove<- c(pathologists_to_remove, pathologist)
+                      
+                      #pull original annotation
+                      original_annotation <- annotationLabelCluster%>% filter(annotationId == annotation)
+                      #Find the cluster that does not  contains the pathologist
+                      clusters_without_pathologist <- which(sapply(cluster_summary$pathologists, function(sublist) !any(grepl(pathologist, sublist))))
+                      if(length(clusters_without_pathologist) ==  0){
+                        new_cluster <- st_sf(
+                          slideName = original_annotation$slideName,
+                          classLabel = original_annotation$classLabel,
+                          dbscan_result.cluster = max(cluster_summary$dbscan_result.cluster) + 1,
+                          component_annotations = original_annotation$annotationId,
+                          pathologists =  original_annotation$pathologist,
+                          geometry =  original_annotation$geometry,
+                          double_assignments  = NA)
+                        
+                        #add to cluster summary
+                        cluster_summary<-rbind(cluster_summary, new_cluster)
+                        } else {
+                          #Loop through the clusters that lack this pathologist and compare distances
+                          distances_to_candidates <- list()
+                          for (cluster in clusters_without_pathologist){
+                            #Define candidate clusters centroid
+                            candidate_cluster_centroid <- st_centroid(cluster_summary$geometry[[cluster]])
+                            
+                            #calculate the distance to the candidate cluster
+                            distance_to_candidate <- st_distance(original_annotation, candidate_cluster_centroid)
+                            #Add distance to list
+                            distances_to_candidates <- c(distances_to_candidates, distance_to_candidate)
+                            }#Candidate cluster level
+                          
+                          #Identify the closest candidate cluster to the index
+                          closest_cluster <- which.min(distances_to_candidates)
+                          
+                          # Add to closest cluster, if distance is < threshold
+                          if(distances_to_candidates[[closest_cluster]] <= threshold){
+                            
+                            #Get cluster index
+                            cluster_index <- clusters_without_pathologist[[closest_cluster]]
+                            
+                            #Add annotationId  to cluster component_annotations
+                            cluster_summary$component_annotations[[cluster_index]] <- c(cluster_summary$component_annotations[[cluster_index]], original_annotation$annotationId)
+                            
+                            #Add pathologist to cluster_summary$pathologists
+                            cluster_summary$pathologists[[cluster_index]] <- c(cluster_summary$pathologists[[cluster_index]], original_annotation$pathologist)
+                            
+                            #Merge geometry to cluster geometry
+                            cluster_summary$geometry[[cluster_index]] <- st_union(cluster_summary$geometry[[cluster_index]], original_annotation$geometry)
+                            
+                            } else {
+                              
+                              #Add annotation as new cluster\
+                              
+                              new_cluster <- st_sf(
+                                slideName = original_annotation$slideName,
+                                classLabel = original_annotation$classLabel,
+                                dbscan_result.cluster = max(cluster_summary$dbscan_result.cluster) + 1,
+                                component_annotations = original_annotation$annotationId,
+                                pathologists =  original_annotation$pathologist,
+                                geometry =  original_annotation$geometry,
+                                double_assignments  = NA)
+                              
+                              cluster_summary<-rbind(cluster_summary, new_cluster)
+                            }
+                        }
+                      }
+                    }#for id
+                  }#pathologist
+                }#if
+              }#cluster
+            
+            #Remove observations from clusters that they are no longer in
+            
+            for (j in seq_along(cluster_indices_to_update)){
+              cluster_index <- cluster_indices_to_update[j][[1]]
+              annotation_to_remove <- annotations_to_remove[j][[1]]
+              original_to_remove <- annotationLabelCluster %>% filter(annotationId == annotation_to_remove)
+              geometry_to_remove <- original_to_remove$geometry[[1]]
+              
+              #Update geometry
+              cluster_summary[cluster_index, ]$geometry <- st_difference(cluster_summary[cluster_index, ]$geometry, geometry_to_remove)
+              
+              #find index
+              path_index <- which(cluster_summary[cluster_index, ]$component_annotations[[1]] == annotation_to_remove)
+              
+              #Update pathologists
+              cluster_summary[cluster_index, ]$pathologists[[1]] <- cluster_summary[cluster_index, ]$pathologists[[1]][-path_index]
+              
+              #Update pathologist
+              cluster_summary[cluster_index, ]$component_annotations[[1]] <- cluster_summary[cluster_index, ]$component_annotations[[1]][-path_index]
+              }
+            
+            #Add a new column "double_assignment_after" to see that everything is fine now
+            cluster_summary <- cluster_summary %>%
+              mutate(double_assignments_after = lapply(pathologists, function(path_list){
+                dup_pathologists <- unique(path_list[duplicated(path_list)])
+                if(length(dup_pathologists) > 0) {
+                  dup_pathologists
+                  } else {
+                    NA
+                    }
+                }))
+            #Add a new column with number of agreeing pathologists in cluster
+            cluster_summary$n_agree <- sapply(cluster_summary$pathologists, length)
+            cluster_summary  <- cluster_summary %>%
+              arrange(desc(n_agree))
+            clusters_slide <- rbind(clusters_slide, cluster_summary)
+          }
+          }
+        } # if length sf annotations
+      
+      referenceAllSlides <- rbind(referenceAllSlides, clusters_slide)
+      } #for slide
+    
+    #Add unique reference ids and update geometry
+    referenceAllSlidesParsed <- referenceAllSlides %>%
+      mutate(
+        referenceId = paste0("C", sprintf("%04d", row_number())),
+        geometry =  st_centroid(geometry)) %>%
+      select(slideName, classLabel, referenceId, n_agree, component_annotations, pathologists, geometry)
+    threshold_name <- as.character(threshold)
+    referencesAllThresholds[[threshold_name]] <- referenceAllSlidesParsed
+    } # for threshold
+  saveRDS(referencesAllThresholds, paste0(outputDir_all,"candidateLc_allTh.rds"))
+}
+
+
+
+#This generates a subset of folders with coordinates and plots for candidate lymphocytes generates with different thresholds
+thresholds <- seq(1.5, 4, by = 0.25)
+slideNames <- readRDS(paste0(top_dir,batch,"/output/lymphocyteValidation/all/slideNames.rds"))
+referencesAllThresholds <- readRDS( paste0(outputDir_all,"candidateLc_allTh.rds"))
+
+#Plot reference annotations with color by level of pathologist agreement
+
+threshold_name <- NULL
+subfolder_path<- NULL
+subfolder_coordinates <- NULL
+subfolder_buffers <- NULL
+subfolder_plots <- NULL
+
+for (threshold in thresholds){
+  
+  threshold_name <- as.character(threshold)
+  
+  subfolder_path <- file.path(annotationsAgree_dir, threshold_name)
+  
+  #Create threshold subfolders
+  if (!dir.exists(subfolder_path)) {
+    dir.create(subfolder_path)
+    }
+  
+  # Create subfolders within subfolder_path
+  subfolder_coordinates <- file.path(subfolder_path, "coordinates")
+  if (!dir.exists(subfolder_coordinates)) {
+    dir.create(subfolder_coordinates)
+    }
+  
+  subfolder_buffers <- file.path(subfolder_path, "buffers")
+  if (!dir.exists(subfolder_buffers)) {
+    dir.create(subfolder_buffers)
+    }
+  
+  subfolder_plots <- file.path(subfolder_path, "plots")
+  if (!dir.exists(subfolder_plots)) {
+    dir.create(subfolder_plots)
+  }
+  
+  matching_files_referenceCoords <- NULL
+  referenceCoordsPath <- NULL
+  referenceCoords <- NULL
+  
+  matching_files_buffers <- NULL
+  buffersPath <- NULL
+  buffers <- NULL
+  
+  matching_files_validMucosaRoi <- NULL
+  validMucosaRoiPath <- NULL
+  validMucosaRoiCoords <- NULL
+  
+   matching_files_sfAnnotations <- NULL
+   sfAnnotationsPath <- NULL
+   sfAnnotationsCoords <- NULL
+   
+
+  for (name in slideNames){
+    
+    if(!any(sapply(list.files(subfolder_coordinates), function(file_name) grepl(name, file_name)))){
+      
+      referenceCoords <- referencesAllThresholds[[threshold_name]] %>% filter(slideName == name)
+      saveRDS(referenceCoords, paste0(subfolder_coordinates, "/", name, "_candidateLc_th_", threshold_name, "_", currentDate, ".rds"))
+    }
+    
+    if(!any(sapply(list.files(subfolder_buffers), function(file_name) grepl(name, file_name)))){
+      
+      matching_files_referenceCoords <- list.files(path = subfolder_coordinates, pattern = paste0("^", name))
+      
+      if(length(matching_files_referenceCoords) > 0){
+        referenceCoordsPath <- file.path(subfolder_coordinates,matching_files_referenceCoords[1])
+        referenceCoords <- readRDS(referenceCoordsPath)
+        
+        #Generate buffers around center coordinate
+        buffers <- st_buffer(referenceCoords, dist = 3)
+        
+        # Make a new column by combining classLabel and nAgree for plot 
+        buffers <- buffers %>%
+          mutate(classLabel_agree = if_else(classLabel == "intraepithelial_lymphocytes", paste0("Intraepithelial n=", n_agree), paste0("Lamina propria n=", n_agree)))
+        
+        # Modify the levels of the factor
+        buffers$classLabel_agree <- factor(buffers$classLabel_agree, levels = c(
+          "Intraepithelial n=1",
+          "Intraepithelial n=2",
+          "Intraepithelial n=3",
+          "Intraepithelial n=4",
+          "Intraepithelial n=5",
+          "Intraepithelial n=6",
+          "Intraepithelial n=7",
+          "Intraepithelial n=8",
+          "Intraepithelial n=9",
+          "Intraepithelial n=10",
+          "Intraepithelial n=11",
+          "Lamina propria n=1",
+          "Lamina propria n=2",
+          "Lamina propria n=3",
+          "Lamina propria n=4",
+          "Lamina propria n=5",
+          "Lamina propria n=6",
+          "Lamina propria n=7",
+          "Lamina propria n=8",
+          "Lamina propria n=9",
+          "Lamina propria n=10",
+          "Lamina propria n=11"
+          ))
+        
+        saveRDS(buffers, paste0(subfolder_buffers,"/", name,"_candidateBuffer_th_",threshold_name, "_",currentDate,".rds"))
+        
+      }
+    }
+    
+    if(!any(sapply(list.files(subfolder_plots), function(file_name) grepl(name, file_name)))){
+      
+      matching_files_validMucosaRoi <- list.files(path = validMucosaRoiCoords_dir, pattern = paste0("^", name))
+      matching_files_lcSegRoi<- list.files(path = lcSegRoiCoords_dir, pattern = paste0("^", name))
+      
+      matching_files_buffers <- list.files(path = subfolder_buffers, pattern = paste0("^", name))
+      
+      matching_files_sfAnnotations <- list.files(path = annotationsSfCoords_dir, pattern = paste0("^", name))
+      
+      validMucosaRoiPath <- NULL
+      validMucosaRoiCoords <- NULL
+      lcSegRoiCoordsPath <- NULL
+      lcSegRoiCoords <- NULL
+      buffersPath <- NULL
+      buffers <- NULL
+      sfAnnotationsPath <- NULL
+      sfAnnotationsCoords <- NULL
+      
+      if(length(matching_files_validMucosaRoi) > 0 && length(matching_files_lcSegRoi) > 0 && length(matching_files_buffers) > 0 && length(matching_files_sfAnnotations) > 0) {
+        
+        validMucosaRoiPath <- file.path(validMucosaRoiCoords_dir,matching_files_validMucosaRoi[1])
+        validMucosaRoiCoords <- readRDS(validMucosaRoiPath)
+        
+        lcSegRoiCoordsPath <- file.path(lcSegRoiCoords_dir, matching_files_lcSegRoi[1])
+        lcSegRoiCoords<- readRDS(lcSegRoiCoordsPath)
+        
+        buffersPath <- file.path(subfolder_buffers, matching_files_buffers[1])
+        buffers <- readRDS(buffersPath)
+        
+        sfAnnotationsPath <- file.path(annotationsSfCoords_dir, matching_files_sfAnnotations[1])
+        sfAnnotationsCoords <- readRDS(sfAnnotationsPath)
+        
+        combined_plot <-  ggplot() +
+           
+           geom_sf(data = flipYcoord(validMucosaRoiCoords), aes(fill = mucosa_class_label)) + scale_fill_manual(values = prediction_palette, name = "AI predictions") +
+           
+           geom_sf(data = flipYcoord(lcSegRoiCoords), aes(fill = mucosa_class_label)) +
+           
+           geom_sf(data = flipYcoord(buffers), aes(color = classLabel_agree), alpha = 0, lwd = 1.8)  +
+          
+          scale_color_manual(values = class_contributors_palette, 
+                             name = "Pathologists (n)\nIntraepithelial / Lamina propria",
+                             labels = class_contributors_labels, 
+                             breaks = levels(buffers$classLabel_agree)) +
+           
+           geom_sf(data = flipYcoord(sfAnnotationsCoords), size = 1) +
+           
+           theme_minimal() +
+          
+          theme(
+            panel.background = element_rect(fill = "white", color = NA),  # Set background to white
+            panel.grid.major = element_blank(),  # Remove major gridlines
+            panel.grid.minor = element_blank(),  # Remove minor gridlines
+            legend.position = "none",
+            legend.box = "horizontal",  # Display legend items vertically
+            legend.direction = "vertical",  # Adjust the direction of legend items
+            legend.key.height = unit(0.3, "in"),  # Adjust the height of the legend key
+            legend.key.width = unit(0.3, "in"),  # Adjust the width of the legend key
+            legend.spacing.y = unit(0.15, "in"),  # Adjust the vertical spacing between legend items
+            axis.text = element_text(size = 27, family = "Arial"),
+            axis.text.x = element_text(angle = 90, hjust = 1),
+            axis.title = element_text(size = 27, family = "Arial"),  # Adjust axis title size
+            legend.title = element_text(size = 27, family = "Arial")) # Adjust legend title size)+
+          
+        
+        # Save the plot as a tif file
+        tiff_file_path <- file.path(subfolder_plots, paste0(name,"_plot@threshold_", threshold_name, "_",currentDate, ".tif"))
+        tiff(tiff_file_path, width= 30, height = 14, units = "in", res=300) #resize to width 5 after
+        print(combined_plot)
+        dev.off()
+      }
+    }
+  }
+}
+
+```
+
+### Distance threshold plots (quick)
+Choose optimal distance threshold for candidate lymphocytes (see"issues" for discussion around thresholds), by comparing density functions for distance to closest annotations by **other** pathologist and distance to closest annotation by **same** pathologist (**Supplementary figure 2a**), and plotting number of reference lymphocytes generated by different thresholds **Supplementary figure 2b** 
+
+#### Input
+- Individual annotations by slide (<output/lymphocyteValidation/bySlide/annotationsDistCoord/>)
+- List of candidate lymphocytes for different distance thresholds </output/lymphocyteValidation/all/candidateLc_allTh.rds> 
+- slideNames  </output/lymphocyteValidation/all/slideNames.rds>
+- pathNames vector </output/lymphocyteValidation/all/pathNames.rds>
+#### Output
+- Distance to closest annotations by **other** pathologist by slide <output/lymphocyteValidation/bySlide/annotationsDistCoord/>
+- Distance to closest annotation by **same** pathologist by slide <output/lymphocyteValidation/bySlide/distanceWithin/>
+- Candidate lymphocytes for all thresholds combined into one dataframe <output/lymphocyteValidation/bySlide/all/candidateLc_allTh_combined.rds>")
+- **Supplementary figure 2a**: Overlapping density functions  <figures/supplementary/S2a_distance_to_closest_annotation.tif>>
+- **Supplementary figure 2b** Number of reference lymphocytes for thresholds <figures/supplementary/S2b_refLc_by_distanceTh.tif"
+
+```{r set distance threshold for candidate lymphocyte clustering}
+slideNames <- readRDS(paste0(top_dir,batch,"/output/lymphocyteValidation/all/slideNames.rds"))
+pathNames <- readRDS(paste0(top_dir,batch,"/output/lymphocyteValidation/all/pathNames.rds")) 
+#For each observation - calculate distance to closest lymphocyte BETWEEN pathologists (by slide and classLabel)
+
+#Function to find the closest annotation by each pathologist
+find_closest_annotation <- function(annotation, annotations_pathologist, pathologist) {
+  distances <- st_distance(annotation$geometry, annotations_pathologist$geometry)
+  min_distance_index <- which.min(distances)
+  closest_ann <- annotations_pathologist$annotationId[min_distance_index]
+  distance_to_closest_ann <- distances[min_distance_index]
+  tibble(!!paste0("closest_ann_",pathologist) := closest_ann, !!paste0("distance_to_closest_ann_",pathologist) := distance_to_closest_ann)
+}
+
+matching_files_annotationsSfCoords <- NULL
+  
+for (name in slideNames){
+  
+  matching_files_annotationsSfCoords <- list()
+  
+  if(!any(sapply(list.files(annotationsDistCoords_dir), function(file_name) grepl(name, file_name)))){
+    
+    matching_files_annotationsSfCoords <- list.files(path = annotationsSfCoords_dir, pattern = paste0("^", name))
+    
+    annotationsSfCoordsPath <- character(0)
+    annotationsSfCoords <- NULL
+    
+    if(length(matching_files_annotationsSfCoords) > 0) {
+      annotationsSfCoordsPath <- file.path(annotationsSfCoords_dir, matching_files_annotationsSfCoords[1])
+      annotationsSfCoords <- readRDS(annotationsSfCoordsPath)
+      
+      annotation_temps <- list()
+      annotation_pathologist <- NULL
+      annotation_temp <- NULL
+      
+      for (p in pathNames){
+        
+        annotation_pathologist <- annotationsSfCoords %>% filter(pathologist == p)
+        annotation_temp  <- annotationsSfCoords %>%
+          group_by(slideName, classLabel) %>%
+          rowwise() %>%
+          mutate(closest_info = list(find_closest_annotation(cur_data(), annotation_pathologist, p))) %>%
+          ungroup() %>%
+          unnest(c(closest_info))
+        
+        annotation_temps[[p]] <- annotation_temp
+      }
+      
+      temp <- NULL
+      annotationsDistCoords <- NULL
+      
+      for (p in pathNames){
+        temp <- annotation_temps[[p]] %>%
+          st_drop_geometry()
+        if(is.null(annotationsDistCoords)){
+          annotationsDistCoords <- st_sf(left_join(annotationsSfCoords, temp))
+          } else {
+            annotationsDistCoords <- st_sf(left_join(annotationsDistCoords, temp))
+          }
+      }
+      
+      saveRDS(annotationsDistCoords, paste0(annotationsDistCoords_dir,name,"_distance_to_closest_other_",currentDate,".rds"))
+      
+    }
+  }
+}
+
+# For each annotation generate distances to the closest lymphocyte WITHIN each pathologists own set of annotations
+
+find_closest_within <- function(annotation, annotations_pathologist) {
+  distances <- st_distance(annotation$geometry, annotations_pathologist$geometry)
+  
+  #Exclude self-matches
+  distances[distances == 0] <- NA
+  
+  min_distance_index <- which.min(distances)
+  
+  if(length(min_distance_index) == 0 || all(is.na(distances))){
+    closest_within <- NA
+    distance_to_closest_within <- NA
+  } else {
+    closest_within <- annotations_pathologist$annotationId[min_distance_index]
+    distance_to_closest_within <- distances[min_distance_index]
+  }
+  
+  tibble(closest_within = closest_within, distance_to_closest_within = distance_to_closest_within)
+}
+
+
+for (name in slideNames){
+  
+  matching_files_annotationsSfCoords <- list()
+  
+  if(!any(sapply(list.files(distanceWithin_dir), function(file_name) grepl(name, file_name)))){
+    
+    matching_files_annotationsSfCoords <- list.files(path = annotationsSfCoords_dir, pattern = paste0("^", name))
+    
+    annotationsSfCoordsPath <- character(0)
+    annotationsSfCoords <- NULL
+    distanceWithinCoords <-NULL
+    
+    if(length(matching_files_annotationsSfCoords) > 0) {
+      annotationsSfCoordsPath <- file.path(annotationsSfCoords_dir, matching_files_annotationsSfCoords[1])
+      annotationsSfCoords <- readRDS(annotationsSfCoordsPath)
+      
+      annotation_temps <- list()
+
+      
+      for (p in pathNames){
+        
+        annotation_pathologist <- annotationsSfCoords %>% filter(pathologist == p)
+        annotation_temp <- annotationsSfCoords %>%
+          filter(pathologist ==p) %>%
+          group_by(slideName ,classLabel) %>%
+          rowwise() %>%
+          mutate(closest_info = list(find_closest_within(cur_data(), annotation_pathologist))) %>%
+          ungroup()%>%
+          unnest(c(closest_info))
+        
+        annotation_temps[[p]] <- annotation_temp
+      }
+      
+      
+      distanceWithinCoords <- bind_rows(annotation_temps)
+      
+      saveRDS(distanceWithinCoords, paste0(distanceWithin_dir,name,"_distanceWithin_", currentDate, ".rds"))
+    }
+  }
+}
+
+#Generate combined frame with distancesWITHIN for all slides and distancesBEtween for all slides
+
+distanceWithinAll <- data.frame()
+distanceBetweenAll <- data.frame()
+
+annotationsDistCoords <- NULL
+distanceWithinCoords <- NULL
+
+for (name in slideNames){
+  
+ matching_files_annotationsDistCoords <- list.files(path = annotationsDistCoords_dir, pattern = paste0("^", name))
+ 
+ matching_files_distanceWithinCoords <- list.files(path = distanceWithin_dir, pattern = paste0("^", name))
+ 
+ annotationsDistCoordsPath <- character(0)
+ annotationsDistCoords <- NULL
+ distanceWithinCoordsPath <- character(0)
+ distanceWithinCoords<- NULL
+ 
+    if(length(matching_files_annotationsDistCoords) > 0 && length(matching_files_distanceWithinCoords) >0) {
+      
+      annotationsDistCoordsPath<- file.path(annotationsDistCoords_dir, matching_files_annotationsDistCoords[1])
+      annotationsDistCoords <- readRDS(annotationsDistCoordsPath) %>% st_drop_geometry()
+      
+      distanceWithinCoordsPath<- file.path(distanceWithin_dir, matching_files_distanceWithinCoords[1])
+      distanceWithinCoords <- readRDS(distanceWithinCoordsPath) %>% st_drop_geometry()
+      
+      #Pivot dist cords longer
+      columns_to_pivot <- grep("^closest_ann_|^distance_to_closest_ann_", names(annotationsDistCoords), value = TRUE)
+      annotationsDistCoords[, columns_to_pivot] <- lapply(annotationsDistCoords[, columns_to_pivot], as.character)
+      
+      distanceBetween <- annotationsDistCoords %>%
+        st_drop_geometry() %>%
+        pivot_longer(cols = columns_to_pivot,
+                     names_to = c("action", "compared_between"),
+                     names_pattern = "^(closest_ann_|distance_to_closest_ann_)(.*)$",
+                     values_to = "value") %>%
+        pivot_wider(names_from = "action", values_from = "value")
+    }
+ distanceWithinAll <- bind_rows(distanceWithinAll, distanceWithinCoords)
+ distanceBetweenAll <- bind_rows(distanceBetweenAll, distanceBetween)
+}
+
+#Supplementary figure 2A - Plot probability density function of distance to closest annotation by other pathologist and distance to closest annotation by the same pathologist and save as tif 
+
+#read in distance between, change to numeric, filter out outliers, and select variables of interest
+
+distanceBetweenAll$distance_to_closest_ann_ <- as.numeric(distanceBetweenAll$distance_to_closest_ann_) 
+
+distanceBetweenAll <- distanceBetweenAll %>%
+  filter(distance_to_closest_ann_ > 0) %>%
+  filter(distance_to_closest_ann_ < 7) %>%
+  select(slideName, annotationId, classLabel, pathologist, closest_ann_, distance_to_closest_ann_)
+
+
+#Plot distances within
+
+                              
+distanceWithinAll <- distanceWithinAll %>%
+  filter(distance_to_closest_within < 7) %>%
+  rename(closest_ann_ = closest_within,
+         distance_to_closest_ann_ = distance_to_closest_within) %>%
+  select(slideName, annotationId, classLabel, pathologist, closest_ann_, distance_to_closest_ann_)
+
+distanceBetweenAll$type <- "By other pathologist"
+distanceWithinAll$type <- "By same pathologist"
+
+distanceCombined <- rbind(distanceBetweenAll, distanceWithinAll)
+
+ plot <- ggplot(distanceCombined, aes(x = distance_to_closest_ann_, fill = type)) +
+  geom_histogram(binwidth = 0.1, position = "identity",
+                 mapping = aes(y = stat(density))) +
+  scale_x_continuous(breaks = seq(0, 7, by = 1)) +
+  scale_fill_manual(values = distance_palette) +
+   labs(x = "Distance to closest annotation (um)", y = "Density", fill = "Type") +
+  theme_bw() +
+  theme(legend.position = "right", 
+        axis.text = element_text(size = 9, family = "Arial"), 
+        axis.title = element_text(size = 9, family = "Arial"),  # Adjust axis title size
+        legend.title = element_text(size = 9, family = "Arial"))  # Adjust legend title size)
+
+
+
+# Save the plot as a tif file
+output_file_tif <- paste0(supplementaryFigures_dir,"S2a_distance_to_closest_annotation.tif")
+tiff(output_file_tif, width = 7, height = 2.36, units = "in", res = 300)
+print(plot)
+dev.off()
+
+
+#Plot comparing number of candidate lymphocytes for different thresholds (Fig S2b)
+
+#Read in list of candidate lymphocytes (for all thresholds) and combine them to one dataframe
+
+candidateLc_allTh <- readRDS(paste0(outputDir_all,"candidateLc_allTh.rds"))
+
+#combine the reference annotations from different thresholds into one list
+candidateLc_allTh_combined <- bind_rows(candidateLc_allTh, .id = "distance_threshold") %>%
+  mutate(
+    n_contributing_pathologists = str_count(pathologists, ", ") + 1,
+    percent_pathologists_contributing = round((n_contributing_pathologists / 11) * 100, 1)
+  )
+
+candidateLc_allTh_combined <- candidateLc_allTh_combined %>%
+  mutate(classLabel_agree = if_else(classLabel == "intraepithelial_lymphocytes", paste0("Intraepithelial n=", n_agree), paste0("Lamina propria n=", n_agree)))
+
+# Modify the levels of the factor
+candidateLc_allTh_combined$classLabel_agree <- factor(candidateLc_allTh_combined$classLabel_agree, levels = c(
+  "Intraepithelial n=1",
+  "Intraepithelial n=2",
+  "Intraepithelial n=3",
+  "Intraepithelial n=4",
+  "Intraepithelial n=5",
+  "Intraepithelial n=6",
+  "Intraepithelial n=7",
+  "Intraepithelial n=8",
+  "Intraepithelial n=9",
+  "Intraepithelial n=10",
+  "Intraepithelial n=11",
+  "Lamina propria n=1",
+  "Lamina propria n=2",
+  "Lamina propria n=3",
+  "Lamina propria n=4",
+  "Lamina propria n=5",
+  "Lamina propria n=6",
+  "Lamina propria n=7",
+  "Lamina propria n=8",
+  "Lamina propria n=9",
+  "Lamina propria n=10",
+  "Lamina propria n=11"
+  ))
+
+
+saveRDS(candidateLc_allTh_combined, paste0(outputDir_all,"candidateLc_allTh_combined.rds"))
+
+
+#Filter out "majority annotations" annotations with 6 or more contributing pathologists for all frames
+
+#Generate reference lymphocytes for all thresholds (candidate lymphocytes with majority contributing)
+reference_lymphocytes_allTh <- candidateLc_allTh_combined %>%
+  filter(n_contributing_pathologists >= 6)
+
+#Summarize by distance threshold and n_contributing pathologists         
+reference_lymphocytes_distTh_class_n_path <- 
+  reference_lymphocytes_allTh %>%
+  st_drop_geometry() %>%
+  group_by(distance_threshold, classLabel_agree, classLabel) %>%
+  summarize(n_reference_annotations = n())
+
+
+#Pull number of individual annotations per pathologist
+annotations <- readRDS(paste0(outputDir_all, "annotations_sf_all.rds"))
+individual_annotations <- annotations %>%
+  st_drop_geometry() %>%
+  group_by(pathologist, classLabel) %>%
+  summarize(n_annotations = n()) %>%
+  arrange(desc(n_annotations)) 
+
+plot <- ggplot(reference_lymphocytes_distTh_class_n_path, aes(x = distance_threshold, y = n_reference_annotations, fill = factor(classLabel_agree))) +
+  geom_bar(stat = "identity") +
+  geom_hline(data = individual_annotations, aes(yintercept = n_annotations, color = pathologist)) +
+  scale_fill_manual(values = class_contributors_palette, name = "Pathologists (n)", labels = class_contributors_labels) +
+  scale_color_manual(values = pathologist_palette) +
+  labs(
+       x = "Distance threshold (um)",
+       y = "Reference lymphocytes (n)",
+       fill = "Pathologists (n)",
+       color = "Pathologist (Id)") + 
+  
+  theme_bw() +
+  theme(legend.position = "right", 
+        legend.box = "horizontal",  # Display legend items vertically
+        legend.direction = "vertical",  # Adjust the direction of legend items
+        legend.key.height = unit(0.1, "in"),  # Adjust the height of the legend key
+        legend.key.width = unit(0.1, "in"),  # Adjust the width of the legend key
+        legend.spacing.y = unit(0.05, "in"),  # Adjust the vertical spacing between legend items
+        axis.text = element_text(size = 9, family = "Arial"),
+        axis.text.x = element_text(angle = 90, hjust = 1),
+        axis.title = element_text(size = 9, family = "Arial"),  # Adjust axis title size
+        legend.title = element_text(size = 9, family = "Arial")) +  # Adjust legend title size)+
+  facet_grid(classLabel ~ ., scales = "free_y", labeller = labeller(classLabel = c("intraepithelial_lymphocytes" = "Intraepithelial lymphocytes", "lamina_propria_lymphocytes" = "Lamina propria lymphocytes"))) +
+  guides(
+    fill = guide_legend(order = 1),
+    color = guide_legend(order = 2)
+  )
+
+print(plot)
+
+# Save the plot as a tif file
+output_file_tif <- paste0(supplementaryFigures_dir,"S2b_refLc_by_distanceTh.tif")
+tiff(output_file_tif, width = 7, height = 4.72, units = "in", res = 300)
+print(plot)
+dev.off()
+```
+
+### Candidate and reference lymphocytes at threshold 2 (quick)
+Choose distance threshold from threshold plots, generate files with candidate lymphocytes and reference lymphocytes (majority of pathologists (6 or more) contributing to the annotation, plot candidate lymhocytes with number of contributors (Figure 4) and calculate percentage reference lymphocytes of candidate lymphocytes (data used in 1st paragraph of Results/Model Validation)). 
+#### Input
+- Candidate lymphocytes for all thresholds combined into one dataframe <output/lymphocyteValidation/bySlide/all/candidateLc_allTh_combined.rds>")
+#### Output
+- Candidate lymphocytes using distance threshold 2 um (<output/lymphocyteValidation/all/candidateLc_Th2.rds)
+- Reference lymphocytes using distance threshold 2 um and majority consensus (<output/lymphocyteValidation/all/referenceLc_Th2.rds)
+- **Figure 5** Stack and bar plot of candidate lymphocytes with number of contributing pathologists <figure/main/F5_candidateLc.tif>
+- Table of % of candidate lymphocytes used as reference lymphocytes <tables/reference_of_candidate_table.xslx>
+```{r candidate and reference lymphocytes at th2}
+#Based on evaluation of the graphs, the distance threshold 2 um is selected for candidate lymphocytes
+candidateLc_allTh_combined.rds <- readRDS(paste0(outputDir_all, "candidateLc_allTh_combined.rds"))
+
+candidateLc_Th2 <- candidateLc_allTh_combined.rds %>%
+  filter(distance_threshold == "2") %>%
+  select(slideName, classLabel, referenceId, n_contributing_pathologists, percent_pathologists_contributing, pathologists, component_annotations, classLabel_agree, geometry)
+
+saveRDS(candidateLc_Th2, paste0(outputDir_all,"candidateLc_Th2.rds"))
+
+#Generate frame with all reference lymphocytes (candidate lymphocytes with more then 6 contributing pathologists)
+referenceLc_Th2<- candidateLc_Th2 %>%
+  filter(n_contributing_pathologists >=6)
+
+saveRDS(referenceLc_Th2, paste0(outputDir_all, "referenceLc_Th2.rds"))
+
+#Stack and bar plot for candidate lymphocytes (Figure 4)
+candidateLc <-  readRDS(paste0(outputDir_all,"candidateLc_Th2.rds")) %>%
+  st_drop_geometry()
+
+#Generate summary frame for plot
+candidateLc_byClass_and_nPath<- candidateLc %>%
+  group_by(classLabel, n_contributing_pathologists, classLabel_agree) %>%
+  summarise(n_annotations = n()) %>%
+  ungroup() %>%
+  group_by(classLabel) %>%
+  mutate(percent_annotations = (n_annotations / sum(n_annotations)) * 100) %>%
+  ungroup()
+
+#Stackd bar plot
+stack_bar_candidate <- ggplot(candidateLc_byClass_and_nPath, aes(x = classLabel, y = percent_annotations, fill = factor(classLabel_agree))) +
+  geom_bar(stat = "identity", width = 0.5) +
+  scale_fill_manual(values = class_contributors_palette, 
+                    name = "Pathologists (n)", 
+                    labels = class_contributors_labels) +
+  labs(
+       x = "",
+       y = "Candidate lymphocytes %",
+       fill = "Class and contributors") + 
+  
+  theme_bw() +
+  theme(
+    legend.position = "right", 
+    legend.box = "horizontal",  # Display legend items vertically
+    legend.direction = "vertical",  # Adjust the direction of legend items
+    legend.key.height = unit(0.1, "in"),  # Adjust the height of the legend key
+    legend.key.width = unit(0.1, "in"),  # Adjust the width of the legend key
+    legend.spacing.y = unit(0.05, "in"),  # Adjust the vertical spacing between legend items
+    axis.text = element_text(size = 9, family = "Arial"),
+    axis.title = element_text(size = 9, family = "Arial"),  
+    legend.title = element_text(size = 9, family = "Arial")
+  ) +
+  scale_x_discrete(labels = c("intraepithelial_lymphocytes" = "Intraepithelial", "lamina_propria_lymphocytes" = "Lamina propria"))
+print(stack_bar_candidate)
+
+# Save the plot as a tif file
+output_file_tif <- paste0(mainFigures_dir,"F5_candidateLc.tif")
+tiff(output_file_tif, width = 7, height = 2.33, units = "in", res = 300)
+print(stack_bar_candidate)
+dev.off()
+
+#Calculate percentage reference lymphocytes from candidate lymphocytes
+#Percentage majority annotations of all
+reference_of_candidate_table <- candidateLc_byClass_and_nPath %>%
+  group_by(classLabel) %>%
+  summarize(
+    n_total = sum(n_annotations),
+    n_majority = sum(n_annotations[n_contributing_pathologists >= 6]),
+    n_minority = sum(n_annotations[n_contributing_pathologists < 6]),
+    percent_annotations_minority = sum(n_annotations[n_contributing_pathologists < 6]) / sum(n_annotations) * 100,
+    percent_annotations_majority = sum(n_annotations[n_contributing_pathologists >= 6]) / sum(n_annotations) * 100
+  )
+
+write_xlsx(reference_of_candidate_table, paste0(tables_dir, "reference_of_candidate_table.xslx"))
+```
+
+### Summary statistics for lymphocytes by source (quick)
+Calculate summary statistics (median and interquartile range) for lymphocytes by source, data for **Table 1**
+
+#### Input
+- Individual annotations all slides (<output/lymphocyteValidation/all/annotations_sf_all.rmd>)
+- Candidate lymphocytes using distance threshold 2 um (<output/lymphocyteValidation/all/candidateLc_Th2.rds)
+- Reference lymphocytes using distance threshold 2 um and majority consensus (<output/lymphocyteValidation/all/referenceLc_Th2.rds)
+- Lymphocyte predictions that overlap with rois with unique Ids and confidence (all slides) <output/lymphocyteValidation/all/predictionsAll.rds> 
+
+#### Output
+- Stats table for "Lymphocytes by source" (used in **Table 1**) as excel  <tables/T1_lymphocytes_bySource.xlsx>
+_ Summaries for individual annotations <output/lymphocyteValidation/all/individual_annotations_summaries.rds> 
+_ Summaries for candidate lymphocytes <output/lymphocyteValidation/all/candidateLc_summaries.rds> 
+_ Summaries for reference lymphocytes <output/lymphocyteValidation/all/referenceLc_summaries.rds> 
+_ Summaries for AI predictions <output/lymphocyteValidation/all/predictionAI_summaries.rds> 
+
+
+```{r summary stats lc by source}
+
+#Generate an empty dataframe for summary statistics
+lymphocytes_bySource <- data.frame(
+  source = character(),
+  total_n = integer(),
+  intraepithelial_lymphocytes_n = integer(),
+  intraepithelial_lymphocytes_median = numeric(),
+  intraepithelial_lymphocytes_lower_quantile = numeric(),
+  intraepithelial_lymphocytes_upper_quantile = numeric(),
+  lamina_propria_lymphocytes_n = integer(),
+  lamina_propria_lymphocytes_median = numeric(),
+  lamina_propria_lymphocytes_lower_quantile = numeric(),
+  lamina_propria_lymphocytes_upper_quantile = numeric(),
+  stringsAsFactors = FALSE
+)
+
+#Individual pathologist annotations
+
+#Read in individual pathologist annotations
+annotations <- readRDS(paste0(outputDir_all, "annotations_sf_all.rds")) %>%
+  st_drop_geometry()
+
+individual_pathologist_annotations_byClass <- annotations %>% #total n of anns for all slides by class
+  group_by(classLabel) %>%
+  summarise(number_of_annotations = n())
+
+#Summary statistics for annotations by class, all slides and pathologists 
+
+#Generate an intermediate frame, with how many annotations each pathologist have for each class, and slide
+individual_annotations_summaries <- annotations %>%
+  group_by(slideName, classLabel, pathologist) %>%
+  summarise(number_of_annotations = n())
+
+#This is to include data on "0 annotations" (when a pathologist haven't annotated a class for a slide)
+all_combinations <- expand_grid(
+  slideName = unique(annotations$slideName),
+  classLabel = unique(annotations$classLabel),
+  pathologist = unique(annotations$pathologist)
+)
+
+individual_annotations_summaries <- all_combinations %>%
+  left_join(individual_annotations_summaries, by = c("slideName", "classLabel", "pathologist")) %>%
+  replace(is.na(.), 0)
+
+#Calculate summary statistics per class
+summaryStats_individual_pathologist_annotations <- individual_annotations_summaries %>%
+  group_by(classLabel) %>%
+  summarise(
+    n = sum(number_of_annotations),
+    average_annotations_per_slide = mean(number_of_annotations),
+    median_annotations_per_slide = median(number_of_annotations),
+    lower_quartile_annotations_per_slide = quantile(number_of_annotations, 0.25),
+    upper_quartile_annotations_per_slide = quantile(number_of_annotations, 0.75),
+    min_annotations_per_slide = min(number_of_annotations),
+    max_annotations_per_slide = max(number_of_annotations)
+  ) 
+
+#Save rds 
+saveRDS(individual_annotations_summaries, paste0(outputDir_all, "individual_annotations_summaries.rds"))
+        
+#Create observation for table
+individual_pathologist_annotations <- data.frame(
+  source = "Individual pathologist annotations",
+  
+  total_n = nrow(annotations),
+  
+  intraepithelial_lymphocytes_n = individual_pathologist_annotations_byClass %>%
+  filter(classLabel == "intraepithelial_lymphocytes") %>%
+  pull(number_of_annotations),
+  
+  intraepithelial_lymphocytes_median = summaryStats_individual_pathologist_annotations %>%
+  filter(classLabel == "intraepithelial_lymphocytes") %>%
+  pull(median_annotations_per_slide),
+  
+  intraepithelial_lymphocytes_lower_quantile = summaryStats_individual_pathologist_annotations %>%
+  filter(classLabel == "intraepithelial_lymphocytes") %>%
+  pull(lower_quartile_annotations_per_slide),
+  
+  intraepithelial_lymphocytes_upper_quantile = summaryStats_individual_pathologist_annotations %>%
+  filter(classLabel == "intraepithelial_lymphocytes") %>%
+  pull(upper_quartile_annotations_per_slide),
+
+  lamina_propria_lymphocytes_n = individual_pathologist_annotations_byClass %>%
+  filter(classLabel == "lamina_propria_lymphocytes") %>%
+  pull(number_of_annotations),
+  
+  lamina_propria_lymphocytes_median = summaryStats_individual_pathologist_annotations %>%
+  filter(classLabel == "lamina_propria_lymphocytes") %>%
+  pull(median_annotations_per_slide),
+  
+  lamina_propria_lymphocytes_lower_quantile = summaryStats_individual_pathologist_annotations %>%
+  filter(classLabel == "lamina_propria_lymphocytes") %>%
+  pull(lower_quartile_annotations_per_slide),
+  
+  lamina_propria_lymphocytes_upper_quantile =
+    summaryStats_individual_pathologist_annotations %>%
+  filter(classLabel == "lamina_propria_lymphocytes") %>%
+  pull(upper_quartile_annotations_per_slide),
+  
+  stringsAsFactors = FALSE
+)
+
+#Add observation to table
+lymphocytes_bySource <- rbind(lymphocytes_bySource, individual_pathologist_annotations)
+
+
+#Candidate lymphocytes
+
+candidateLc <-  readRDS(paste0(outputDir_all,"candidateLc_Th2.rds")) %>%
+  st_drop_geometry()
+
+candidateLc_byClass <- candidateLc %>% #total n of anns for all slides by class
+  group_by(classLabel) %>%
+  summarise(number_of_annotations = n())
+
+#Summary statistics for annotations by class, all slides and pathologists 
+
+#Generate an intermediate frame, with how many candidate lc for each class, and slide
+candidateLc_summaries <- candidateLc %>%
+  group_by(slideName, classLabel) %>%
+  summarise(number_of_annotations = n())
+
+#This is to include data on "0 annotations" 
+all_combinations <- expand_grid(
+  slideName = unique(candidateLc$slideName),
+  classLabel = unique(candidateLc$classLabel))
+
+candidateLc_summaries <- all_combinations %>%
+  left_join(candidateLc_summaries, by = c("slideName", "classLabel")) %>%
+  replace(is.na(.), 0)
+
+#Calculate summary statitstics per class
+summaryStats_candidateLc <- candidateLc_summaries %>%
+  group_by(classLabel) %>%
+  summarise(
+    n = sum(number_of_annotations),
+    average_annotations_per_slide = mean(number_of_annotations),
+    median_annotations_per_slide = median(number_of_annotations),
+    lower_quartile_annotations_per_slide = quantile(number_of_annotations, 0.25),
+    upper_quartile_annotations_per_slide = quantile(number_of_annotations, 0.75),
+    min_annotations_per_slide = min(number_of_annotations),
+    max_annotations_per_slide = max(number_of_annotations)
+  ) 
+
+#Save rds 
+saveRDS(candidateLc_summaries, paste0(outputDir_all, "candidateLc_summaries.rds"))
+
+#Create observation for table
+candidate_lymphocyte_annotations <- data.frame(
+  source = "Candidate lymphocytes",
+  
+  total_n = nrow(candidateLc),
+  
+  intraepithelial_lymphocytes_n = candidateLc_byClass %>%
+  filter(classLabel == "intraepithelial_lymphocytes") %>%
+  pull(number_of_annotations),
+  
+  intraepithelial_lymphocytes_median = summaryStats_candidateLc %>%
+  filter(classLabel == "intraepithelial_lymphocytes") %>%
+  pull(median_annotations_per_slide),
+  
+  intraepithelial_lymphocytes_lower_quantile = summaryStats_candidateLc %>%
+  filter(classLabel == "intraepithelial_lymphocytes") %>%
+  pull(lower_quartile_annotations_per_slide),
+  
+  intraepithelial_lymphocytes_upper_quantile = summaryStats_candidateLc %>%
+  filter(classLabel == "intraepithelial_lymphocytes") %>%
+  pull(upper_quartile_annotations_per_slide),
+
+  lamina_propria_lymphocytes_n = candidateLc_byClass %>%
+  filter(classLabel == "lamina_propria_lymphocytes") %>%
+  pull(number_of_annotations),
+  
+  lamina_propria_lymphocytes_median = summaryStats_candidateLc %>%
+  filter(classLabel == "lamina_propria_lymphocytes") %>%
+  pull(median_annotations_per_slide),
+  
+  lamina_propria_lymphocytes_lower_quantile = summaryStats_candidateLc %>%
+  filter(classLabel == "lamina_propria_lymphocytes") %>%
+  pull(lower_quartile_annotations_per_slide),
+  
+  lamina_propria_lymphocytes_upper_quantile =
+    summaryStats_candidateLc %>%
+  filter(classLabel == "lamina_propria_lymphocytes") %>%
+  pull(upper_quartile_annotations_per_slide),
+  
+  stringsAsFactors = FALSE
+)
+
+#Add observation to table
+lymphocytes_bySource <- rbind(lymphocytes_bySource, candidate_lymphocyte_annotations)
+
+### Reference lymphocytes
+referenceLc <- readRDS(paste0(outputDir_all,"referenceLc_Th2.rds")) %>%
+  st_drop_geometry()
+
+referenceLc_byClass <- referenceLc %>% #total n of anns for all slides by class
+  group_by(classLabel) %>%
+  summarise(number_of_annotations = n())
+
+#Summary statistics for annotations by class, all slides and pathologists 
+
+#Generate an intermediate frame, with how many candidate lc for each class, and slide
+referenceLc_summaries <- referenceLc %>%
+  group_by(slideName, classLabel) %>%
+  summarise(number_of_annotations = n())
+
+#This is to include data on "0 annotations" 
+all_combinations <- expand_grid(
+  slideName = unique(referenceLc$slideName),
+  classLabel = unique(referenceLc$classLabel))
+
+referenceLc_summaries <- all_combinations %>%
+  left_join(referenceLc_summaries, by = c("slideName", "classLabel")) %>%
+  replace(is.na(.), 0)
+
+
+#Calculate summary statitstics per class
+summaryStats_referenceLc <- referenceLc_summaries  %>%
+  group_by(classLabel) %>%
+  summarise(
+    n = sum(number_of_annotations),
+    average_annotations_per_slide = mean(number_of_annotations),
+    median_annotations_per_slide = median(number_of_annotations),
+    lower_quartile_annotations_per_slide = quantile(number_of_annotations, 0.25),
+    upper_quartile_annotations_per_slide = quantile(number_of_annotations, 0.75),
+    min_annotations_per_slide = min(number_of_annotations),
+    max_annotations_per_slide = max(number_of_annotations)
+  ) 
+
+#Save rds 
+saveRDS(referenceLc_summaries, paste0(outputDir_all, "referenceLc_summaries.rds"))
+
+#Create observation for table
+reference_lymphocyte_annotations <- data.frame(
+  source = "Reference lymphocytes",
+  
+  total_n = nrow(referenceLc),
+  
+  intraepithelial_lymphocytes_n = referenceLc_byClass %>%
+  filter(classLabel == "intraepithelial_lymphocytes") %>%
+  pull(number_of_annotations),
+  
+  intraepithelial_lymphocytes_median = summaryStats_referenceLc %>%
+  filter(classLabel == "intraepithelial_lymphocytes") %>%
+  pull(median_annotations_per_slide),
+  
+  intraepithelial_lymphocytes_lower_quantile = summaryStats_referenceLc %>%
+  filter(classLabel == "intraepithelial_lymphocytes") %>%
+  pull(lower_quartile_annotations_per_slide),
+  
+  intraepithelial_lymphocytes_upper_quantile = summaryStats_referenceLc %>%
+  filter(classLabel == "intraepithelial_lymphocytes") %>%
+  pull(upper_quartile_annotations_per_slide),
+
+  lamina_propria_lymphocytes_n = referenceLc_byClass %>%
+  filter(classLabel == "lamina_propria_lymphocytes") %>%
+  pull(number_of_annotations),
+  
+  lamina_propria_lymphocytes_median = summaryStats_referenceLc %>%
+  filter(classLabel == "lamina_propria_lymphocytes") %>%
+  pull(median_annotations_per_slide),
+  
+  lamina_propria_lymphocytes_lower_quantile = summaryStats_referenceLc %>%
+  filter(classLabel == "lamina_propria_lymphocytes") %>%
+  pull(lower_quartile_annotations_per_slide),
+  
+  lamina_propria_lymphocytes_upper_quantile =
+    summaryStats_referenceLc %>%
+  filter(classLabel == "lamina_propria_lymphocytes") %>%
+  pull(upper_quartile_annotations_per_slide),
+  
+  stringsAsFactors = FALSE
+)
+
+#Add observation to table
+lymphocytes_bySource <- rbind(lymphocytes_bySource, reference_lymphocyte_annotations)
+
+#AI-predictions
+
+predictionAll <- readRDS(paste0(outputDir_all,"predictionsAll.rds")) %>%
+  st_drop_geometry()
+
+predictionsAI_byClass <- predictionAll%>%
+  group_by(classLabel) %>%
+  summarise(number_of_annotations = n())
+
+predictionAI_summaries <- predictionAll %>%
+  group_by(slideName, classLabel) %>%
+  summarise(number_of_annotations = n())
+
+all_combinations <- expand_grid(
+  slideName = unique(predictionAll$slideName),
+  classLabel = unique(predictionAll$classLabel))
+
+predictionAI_summaries<- all_combinations %>%
+  left_join(predictionAI_summaries, by = c("slideName", "classLabel")) %>%
+  replace(is.na(.), 0)
+
+#Calculate summary statitstics per class
+summaryStats_predictionAI <- predictionAI_summaries %>%
+  group_by(classLabel) %>%
+  summarise(
+    n = sum(number_of_annotations),
+    average_annotations_per_slide = mean(number_of_annotations),
+    median_annotations_per_slide = median(number_of_annotations),
+    lower_quartile_annotations_per_slide = quantile(number_of_annotations, 0.25),
+    upper_quartile_annotations_per_slide = quantile(number_of_annotations, 0.75),
+    min_annotations_per_slide = min(number_of_annotations),
+    max_annotations_per_slide = max(number_of_annotations)
+  ) 
+
+#Save rds 
+saveRDS(predictionAI_summaries, paste0(outputDir_all, "predictionAI_summaries.rds"))
+
+#Create observation for table
+predictionAI_annotations <- data.frame(
+  source = "AI-generated lymphocyte predictions",
+  
+  total_n = nrow(predictionAll),
+  
+  intraepithelial_lymphocytes_n = predictionsAI_byClass %>%
+  filter(classLabel == "intraepithelial_lymphocytes") %>%
+  pull(number_of_annotations),
+  
+  intraepithelial_lymphocytes_median = summaryStats_predictionAI %>%
+  filter(classLabel == "intraepithelial_lymphocytes") %>%
+  pull(median_annotations_per_slide),
+  
+  intraepithelial_lymphocytes_lower_quantile = summaryStats_predictionAI %>%
+  filter(classLabel == "intraepithelial_lymphocytes") %>%
+  pull(lower_quartile_annotations_per_slide),
+  
+  intraepithelial_lymphocytes_upper_quantile = summaryStats_predictionAI %>%
+  filter(classLabel == "intraepithelial_lymphocytes") %>%
+  pull(upper_quartile_annotations_per_slide),
+
+  lamina_propria_lymphocytes_n = predictionsAI_byClass %>%
+  filter(classLabel == "lamina_propria_lymphocytes") %>%
+  pull(number_of_annotations),
+  
+  lamina_propria_lymphocytes_median = summaryStats_predictionAI %>%
+  filter(classLabel == "lamina_propria_lymphocytes") %>%
+  pull(median_annotations_per_slide),
+  
+  lamina_propria_lymphocytes_lower_quantile = summaryStats_predictionAI %>%
+  filter(classLabel == "lamina_propria_lymphocytes") %>%
+  pull(lower_quartile_annotations_per_slide),
+  
+  lamina_propria_lymphocytes_upper_quantile =
+    summaryStats_predictionAI %>%
+  filter(classLabel == "lamina_propria_lymphocytes") %>%
+  pull(upper_quartile_annotations_per_slide),
+  
+  stringsAsFactors = FALSE
+)
+
+#Add observation to table
+lymphocytes_bySource <- rbind(lymphocytes_bySource, predictionAI_annotations)
+
+
+#Save as rds
+saveRDS(lymphocytes_bySource, paste0(outputDir_all,"T1_lymphocytes_bySource.rds"))
+#and excel
+write_xlsx(lymphocytes_bySource, paste0(tables_dir, "T1_lymphocytes_bySource.xlsx"))
+```
+
+### Histograms for lymphocytes per ROI (quick)
+Plots histograms for candidate lymphocytes, reference lymphocyte, ai-generated lymphocyte predictions and individual annotations, per validation region 
+
+#### Input
+-Summaries for individual annotations <output/lymphocyteValidation/all/individual_annotations_summaries.rds>
+_ Summaries for candidate lymphocytes <output/lymphocyteValidation/all/candidateLc_summaries.rds> 
+_ Summaries for reference lymphocytes <output/lymphocyteValidation/all/referenceLc_summaries.rds> 
+_ Summaries for AI predictions <output/lymphocyteValidation/all/predictionAI_summaries.rds> 
+
+#### Output
+- **Supplementary figure 3** - Histograms for candidate lymphocytes, reference lymphocytes, AI-predictions and  individual annotations per validation region, per pathologist <figure/supplementary/S3_histogram_perROI.tif>
+
+- Combined summaries tables as rds <output/lymphocyteValidation/all/combined_summaries.rds> 
+
+```{r}
+#Combine summmary sheets
+individual_annotations_summaries <- readRDS(paste0(outputDir_all, "individual_annotations_summaries.rds"))
+
+candidateLc_summaries <- readRDS(paste0(outputDir_all, "candidateLc_summaries.rds")) %>%
+  mutate(pathologist = "Cand")
+
+referenceLc_summaries <- readRDS(paste0(outputDir_all, "referenceLc_summaries.rds")) %>%
+  mutate(pathologist = "Ref")
+
+predictionAI_summaries <- readRDS(paste0(outputDir_all, "predictionAI_summaries.rds")) %>%
+  mutate(pathologist = "AI")
+
+combined_summaries <- rbind(individual_annotations_summaries, candidateLc_summaries, referenceLc_summaries, predictionAI_summaries)
+
+# Define the desired order of the pathologists
+pathologist_order <- c("Cand", "Ref", "AI", "p01", "p02", "p03", "p04", "p05", "p06", "p07", "p08", "p09", "p10", "p11")
+
+# Convert the pathologist variable to a factor with the desired order
+combined_summaries$pathologist <- factor(combined_summaries$pathologist, levels = pathologist_order)
+
+#Save as rds
+saveRDS(combined_summaries, paste0(outputDir_all, "combined_summaries.rds"))
+
+#Plot 
+histogram_combined <- ggplot(combined_summaries, aes(x = number_of_annotations, fill = classLabel)) +
+  geom_histogram(position = "identity", color = "white", bins = 30) +
+  facet_grid(pathologist ~ classLabel, labeller = labeller(classLabel = c("intraepithelial_lymphocytes" = "Intraepithelial", "lamina_propria_lymphocytes" = "Lamina propria"))) + 
+  scale_fill_manual(values = classLabel_palette) +
+  labs(
+       x = "Lymphocytes per validation region (n)",
+       y = "Validation regions (n)",
+       fill = "Pathologist") +
+  theme_bw() +
+  theme(legend.position = "none", 
+        legend.box = "vertical",  # Display legend items vertically
+        legend.direction = "vertical",  # Adjust the direction of legend items
+        legend.key.height = unit(0.1, "in"),  # Adjust the height of the legend key
+        legend.key.width = unit(0.1, "in"),  # Adjust the width of the legend key
+        legend.spacing.y = unit(0.05, "in"),  # Adjust the vertical spacing between legend items
+        axis.text = element_text(size = 9, family = "Arial"),
+        axis.title = element_text(size = 9, family = "Arial"),  # Adjust axis title size
+        legend.title = element_text(size = 9, family = "Arial"),# Adjust legend title size 
+        strip.text = element_text(size = 9, family = "Arial"))  # Allow facet labels to wrap into two rows
+        
+print(histogram_combined)
+
+# Save the plot as a tif file
+output_file_tif <- paste0(supplementaryFigures_dir,"S3_histogram_perROI.tif")
+tiff(output_file_tif, width = 3.54, height = 8.26, units = "in", res = 300)
+print(histogram_combined)
+dev.off()
+```
+
+### Pathologist rank (quick)
+Ranks pathologists, reference lymphocytes and AI-predictions according to number of lymphocytes per validation region (low rank = many annotations)
+#### Input
+- Combined summaries tables <output/lymphocyteValidation/all/combined_summaries.rds> 
+#### Output
+- **Main figure 6** Pathologist ranking by number of lymphocytes per validation region. <figure/main/F6_pathologistRank.tif>
+```{r rank annotators by generosity}
+
+combined_summaries <- readRDS(paste0(outputDir_all, "combined_summaries.rds"))
+
+combined_summaries_withRank <- combined_summaries %>%
+  filter (pathologist != "Cand") %>%
+  group_by(slideName, classLabel, pathologist) %>%
+  summarise(number_of_annotations = sum(number_of_annotations)) %>%
+  ungroup () %>%
+  group_by(slideName, classLabel) %>%
+  mutate(rank = rank(desc(number_of_annotations))) %>%
+  ungroup()
+
+
+plot <- ggplot(combined_summaries_withRank, aes(x = pathologist, y = rank, fill = classLabel)) +
+  geom_boxplot()+
+  labs(
+       x = "",
+       y = "Ranking by number of lymphocytes") +
+   scale_fill_manual(values = classLabel_palette) +
+  theme_bw() +
+  theme(legend.position = "none", 
+        axis.text.x = element_text(angle = 90, hjust = 1),
+        axis.text = element_text(size = 9, family = "Arial")) +
+  facet_grid(classLabel ~ ., scales = "free_y", labeller = labeller(classLabel = c("intraepithelial_lymphocytes" = "Intraepithelial", "lamina_propria_lymphocytes" = "Lamina propria"))) 
+
+
+print(plot)
+
+# Save the plot as a tif file
+output_file_tif <- paste0(mainFigures_dir,"F6_pathologistRank.tif")
+tiff(output_file_tif, width = 7, height = 4.66, units = "in", res = 300)
+print(plot)
+dev.off()
+```
+
+### Confusion matrices (quick)
+Maps ai-predictions to candidate lymphocytes based on center distance, and categorizes them as TP or FP (un-mapped candidate lymphocytes are categorized as FN), recalculates based on majority threshold for contributing pathologists (6)
+#### Input
+- Candidate lymphocytes using distance threshold 2 um (<output/lymphocyteValidation/all/candidateLc_Th2.rds>)
+- Lymphocyte predictions that overlap with rois with unique Ids and confidence by slide <output/lymphocyteValidation/bySlide/predictions/coordinates/>
+#### Output
+- Confusion terms at majority threshold (<output/lymphocyteValidation/all/confusionTerms_majority.rds>)
+- Confusion matrix at majority threshold (<output/lymphocyteValidation/all/confusionMatrix_majority.rds>)
+- **Main figure 9** Confusion matrix terms by contributing pathologists <figure/main/F9_confusion.tif">
+- Excel with number of confusion terms of different types <tables/confusionTerms_summary.xlsx>
+
+
+```{r}
+slideNames <- readRDS(paste0(top_dir,batch,"/output/lymphocyteValidation/all/slideNames.rds"))
+candidate_2_allSlides <- readRDS(paste0(outputDir_all,"candidateLc_Th2.rds"))
+
+confusion_termsAll <- NULL
+candidate_2 <- NULL
+matching_files_predictions <- list()
+
+for (name in slideNames){
+  #filter candidates on slide
+  candidate_2 <- candidate_2_allSlides %>%
+    filter(slideName == name) %>%
+    select(slideName, classLabel, referenceId, n_contributing_pathologists, classLabel_agree, geometry)
+  
+  matching_files_predictions <- list.files(path = predictionsCoords_dir, pattern = paste0("^", name))
+  prediction <- NULL
+  
+  if(length(matching_files_predictions) > 0){
+    
+    #Load prediction
+    prediction <- readRDS(file.path(predictionsCoords_dir, matching_files_predictions))
+    candidate_label <- NULL
+    prediction_label <- NULL
+    confusion_terms_slide <- NULL
+    
+    #Iterate througn classLabels
+    for (label in c("lamina_propria_lymphocytes",  "intraepithelial_lymphocytes")){
+      
+       candidate_label <- candidate_2 %>% 
+         filter(classLabel == label) %>%
+         arrange(desc(n_contributing_pathologists))
+       
+       prediction_label <- prediction %>% 
+         filter(classLabel == label)
+       
+       objects_label <- data.frame()
+       
+       used_refs <- c()
+       current_prediction <- NULL
+       unused_candidate_label <- NULL
+       distances <- NULL
+       within_distance <- NULL
+       closest_candidate <- NULL
+       new_object <- NULL
+       
+       #If there are both predictions and candidates for the label - match predictions to candidates
+       
+       if(nrow(prediction_label) > 0 & nrow(candidate_label) > 0){
+         for(i in 1:nrow(prediction_label)) {
+           current_prediction <- prediction_label[i, ]
+           
+           #filter candidate label to only include unused references
+            unused_candidate_label <- candidate_label[!(candidate_label$referenceId %in% unlist(used_refs)), ]
+            
+             if(nrow(unused_candidate_label) > 0) {
+               distances <- st_distance(st_geometry(current_prediction), st_geometry(unused_candidate_label))
+               closest_index <- which.min(distances)
+               closest_candidate<- unused_candidate_label[closest_index, ]
+               
+               #check if there are any candidates within distance
+               if (distances[closest_index] <= 2) {
+                 new_object <- data.frame(
+                   slideName = current_prediction$slideName,
+                   classLabel = current_prediction$classLabel,
+                   predictionId = current_prediction$predictionId,
+                   confidence = current_prediction$confidence,
+                   referenceId = closest_candidate$referenceId,
+                   n_contributing_pathologists = closest_candidate$n_contributing_pathologists,
+                   dist = distances[closest_index],
+                   TP = 1,
+                   FP = 0,
+                   FN = 0)
+                 objects_label <- bind_rows(objects_label, new_object)
+                 
+                 used_refs<- c(used_refs, closest_candidate$referenceId)
+                 
+                 } else {
+                   new_object <- data.frame(
+                     slideName = current_prediction$slideName,
+                     classLabel = current_prediction$classLabel,
+                     predictionId = current_prediction$predictionId,
+                     confidence = current_prediction$confidence,
+                     referenceId = NA,
+                     n_contributing_pathologists = 0,
+                     dist = NA,
+                     TP = 0,
+                     FP = 1,
+                     FN = 0)
+                   objects_label <- bind_rows(objects_label, new_object)
+                 }
+             } else {
+               new_object <- data.frame(
+                 slideName = current_prediction$slideName,
+                 classLabel = current_prediction$classLabel,
+                 predictionId = current_prediction$predictionId,
+                 confidence = current_prediction$confidence,
+                 referenceId = NA,
+                 n_contributing_pathologists = 0,
+                 dist = NA,
+                 TP = 0,
+                 FP = 1,
+                 FN = 0)
+               objects_label <- bind_rows(objects_label, new_object)
+             }
+         }
+         
+         unused_candidate_label <- candidate_label[!(candidate_label$referenceId %in% unlist(used_refs)), ]
+         
+         if(nrow(unused_candidate_label) > 0) {
+           for(j in 1:nrow(unused_candidate_label)){
+             current_unused_candidate <- unused_candidate_label[j, ]
+             new_object <- data.frame(
+               slideName = current_unused_candidate$slideName,
+               classLabel = current_unused_candidate$classLabel,
+               predictionId = NA,
+               confidence = NA,
+               referenceId = current_unused_candidate$referenceId,
+               n_contributing_pathologists = current_unused_candidate$n_contributing_pathologists,
+               dist = NA,
+               TP = 0,
+               FP = 0,
+               FN = 1)
+             objects_label <- bind_rows(objects_label, new_object)
+           }
+         }
+       }
+       
+       if(nrow(prediction_label) == 0 & nrow(candidate_label) > 0){
+         for(k in 1:nrow(candidate_label)){
+           current_candidate <- candidate_label[k, ]
+           new_object <- data.frame(
+             slideName = current_candidate$slideName,
+             classLabel = current_candidate$classLabel,
+             predictionId = NA,
+             confidence = NA,
+             referenceId = current_candidate$referenceId,
+             n_contributing_pathologists = current_candidate$n_contributing_pathologists,
+             dist = NA,
+             TP = 0,
+             FP = 0,
+             FN = 1)
+           objects_label <- bind_rows(objects_label, new_object)
+         }
+       }
+       
+       if(nrow(prediction_label) > 0 & nrow(candidate_label) == 0){
+          for(l in 1:nrow(prediction_label)){
+            current_prediction <- prediction_label[l, ]
+            new_object <- data.frame(
+              slideName = current_prediction$slideName,
+              classLabel = current_prediction$classLabel,
+              predictionId = current_prediction$predictionId,
+              confidence = current_prediction$confidence,
+              referenceId = NA,
+              n_contributing_pathologists = 0,
+              dist = NA,
+              TP = 0,
+              FP = 1,
+              FN = 0)
+            objects_label <- bind_rows(objects_label, new_object)
+          }
+       }
+       
+       if(nrow(prediction_label) == 0 & nrow(candidate_label) == 0){
+         new_object <- data.frame(
+           slideName = character(),
+           classLabel = character(),
+           predictionId = character(),
+           confidence = numeric(),
+           referenceId = character(),
+           n_contributing_pathologists = numeric(),
+           dist = numeric(),
+           TP = numeric(),
+           FP = numeric(),
+           FN = numeric())
+         objects_label <- bind_rows(objects_label, new_object)
+       }
+       
+       confusion_terms_slide <- bind_rows(confusion_terms_slide, objects_label)
+    }
+    confusion_termsAll <- bind_rows(confusion_termsAll, confusion_terms_slide)
+  }
+}
+    
+#Saves confusion terms for candidate lymphocytes      
+#saveRDS(confusion_termsAll, paste0(outputDir_all,"confusionTerms_candidates_th2.rds"))   
+
+#Modifies confusion terms for candidate lymphocytes for different contributor thresholds
+
+#confusion_termsAll <- readRDS(paste0( outputDir_all,"confusionTerms_candidates_th2.rds"))
+
+contributor_thresholds <- c(1:11)
+
+confusionTerms_byConTh <- NULL
+confusionMatrices_byConTh <- NULL
+
+for (th in contributor_thresholds){
+  
+  confusionTerms <- confusion_termsAll %>%
+    mutate(n_contributor_threshold = th,
+           TP_old = TP,
+           FP_old = FP,
+           FN_old = FN,
+           TP_change = TP & n_contributing_pathologists < th,
+           FN_change = FN & n_contributing_pathologists < th,
+           TP = TP_old - TP_change,
+           FP = FP_old + TP_change,
+           FN = FN_old - FN_change
+           )
+  confusionTerms_byConTh[[th]] <- confusionTerms
+  
+  confusionMatrix <- confusionTerms %>%
+    group_by(slideName, classLabel, n_contributor_threshold) %>%
+    
+    summarize(TP = sum(TP),
+              FP = sum(FP),
+              FN = sum(FN),
+              se = ifelse((TP + FN) > 0, (TP / (TP + FN))*100, NA),
+              ppv = ifelse((TP + FP) > 0, (TP / (TP + FP))*100, NA),
+              f1_score = ifelse(!is.na(se) & !is.na(ppv), 2 * (ppv * se) / (ppv + se), 1))%>%
+    ungroup() 
+  
+  confusionMatrices_byConTh[[th]] <- confusionMatrix
+  
+}
+
+#saveRDS(confusionMatrices_byConTh, paste0( outputDir_all,"confusionMatrices_byContributorTh.rds"))
+
+#saveRDS(confusionTerms_byConTh, paste0(outputDir_all,"confusionTerms_byContributorTh.rds"))
+
+#Save confusion terms and confusion matrix for majority threshold (6)
+confusionTerms_majority <- confusionTerms_byConTh[[6]] %>%
+  select(slideName:n_contributor_threshold) %>%
+  mutate(classLabel_agree = if_else(classLabel == "intraepithelial_lymphocytes", paste0("Intraepithelial n=", n_contributing_pathologists), paste0("Lamina propria n=", n_contributing_pathologists)),
+         confidence_percentage = confidence * 100,
+         confusion_term = case_when(
+           TP == 1 ~ "TP",
+           FP == 1 ~ "FP",
+           FN == 1 ~ "FN",
+           TRUE ~ "TN"))
+        
+# Modify the levels of the factor
+confusionTerms_majority$classLabel_agree <- factor(confusionTerms_majority$classLabel_agree, levels = c("Intraepithelial n=0",
+          "Intraepithelial n=1",
+          "Intraepithelial n=2",
+          "Intraepithelial n=3",
+          "Intraepithelial n=4",
+          "Intraepithelial n=5",
+          "Intraepithelial n=6",
+          "Intraepithelial n=7",
+          "Intraepithelial n=8",
+          "Intraepithelial n=9",
+          "Intraepithelial n=10",
+          "Intraepithelial n=11",
+          "Lamina propria n=0",
+          "Lamina propria n=1",
+          "Lamina propria n=2",
+          "Lamina propria n=3",
+          "Lamina propria n=4",
+          "Lamina propria n=5",
+          "Lamina propria n=6",
+          "Lamina propria n=7",
+          "Lamina propria n=8",
+          "Lamina propria n=9",
+          "Lamina propria n=10",
+          "Lamina propria n=11"
+          ))
+
+saveRDS(confusionTerms_majority, paste0(outputDir_all,"confusionTerms_majority.rds"))
+
+confusionMatrix_majority <- confusionMatrices_byConTh[[6]]
+
+saveRDS(confusionMatrix_majority, paste0(outputDir_all,"confusionMatrix_majority.rds"))
+
+#Plot the composition of confusion terms by contributing pathologists
+confusionTerms_majority <- readRDS(paste0(outputDir_all,"confusionTerms_majority.rds"))
+
+confusionTerms_forPlot <- confusionTerms_majority %>%
+  group_by(confusion_term, classLabel_agree, classLabel) %>%
+  summarize(count = n()) 
+
+
+plot <- ggplot(confusionTerms_forPlot, aes(x = confusion_term, y = count, fill = factor(classLabel_agree))) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = class_contributors_palette_2, name = "Pathologists (n)", label = class_contributors_labels_2) +
+  labs(
+
+    x = "",
+    y = "Count"
+  ) +
+  theme_bw() +
+  facet_grid(. ~ classLabel, scales = "free_y", switch = "y", labeller = labeller(classLabel = c("intraepithelial_lymphocytes" = "Intraepithelial", "lamina_propria_lymphocytes" = "Lamina propria"))) +
+  theme(
+    legend.position = "right", 
+    legend.box = "horizontal",  # Display legend items vertically
+    legend.direction = "vertical",  # Adjust the direction of legend items
+    legend.key.height = unit(0.1, "in"),  # Adjust the height of the legend key
+    legend.key.width = unit(0.1, "in"),  # Adjust the width of the legend key
+    legend.spacing.y = unit(0.05, "in"),  # Adjust the vertical spacing between legend items
+    axis.text = element_text(size = 9, family = "Arial"),
+    axis.title = element_text(size = 9, family = "Arial"),
+    legend.title = element_text(size = 9, family = "Arial")
+  )
+
+print(plot)
+
+output_file_tif <- paste0(mainFigures_dir,"F9_confusion.tif")
+tiff(output_file_tif, width = 7, height = 2.33, units = "in", res = 300)
+print(plot)
+dev.off()
+
+
+
+
+#Summary table confusion terms
+
+# Calculate number of confusion terms per type and number of contributing pathologists
+confusionTerms_byPath_summary <- confusionTerms_majority %>%
+  group_by(confusion_term, n_contributing_pathologists) %>%
+  summarise(count = n()) %>%
+  ungroup()
+
+# Calculate counts for each confusion term
+FP_counts <- confusionTerms_byPath_summary %>%
+  filter(confusion_term == "FP") %>%
+  summarise(count = sum(count)) %>%
+  mutate(summary_type = "FP")
+
+FN_counts <- confusionTerms_byPath_summary %>%
+  filter(confusion_term == "FN") %>%
+  summarise(count = sum(count)) %>%
+  mutate(summary_type = "FN")
+
+# Combine the results into a single dataframe
+confusionTerms_summary <- bind_rows(FP_counts, FN_counts)
+
+# Calculate number of false predictions
+false_predictions <- bind_rows(FP_counts, FN_counts) %>%
+  summarise(count = sum(count)) %>%
+  mutate(summary_type = "false_predictions")
+
+# Calculate number of equivocal false predictions
+equivocal_FP <- confusionTerms_byPath_summary %>%
+  filter(confusion_term == "FP" & n_contributing_pathologists > 0) %>%
+  summarise(count = sum(count)) %>%
+  mutate(summary_type = "equivocal_FP")
+
+# Calculate number of equivocal false predictions
+equivocal_FN <- confusionTerms_byPath_summary %>%
+  filter(confusion_term == "FN" & n_contributing_pathologists <11) %>%
+  summarise(count = sum(count)) %>%
+  mutate(summary_type = "equivocal_FN")
+
+# Calculate number of false predictions
+equivocal_false_predictions <- bind_rows(equivocal_FP, equivocal_FN) %>%
+  summarise(count = sum(count)) %>%
+  mutate(summary_type = "equivocal_false_predictions")
+
+# Calculate number of equivocal false predictions
+unequivocal_FP <- confusionTerms_byPath_summary %>%
+  filter(confusion_term == "FP" & n_contributing_pathologists == 0) %>%
+  summarise(count = sum(count)) %>%
+  mutate(summary_type = "unequivocal_FP")
+
+# Calculate number of equivocal false predictions
+unequivocal_FN <- confusionTerms_byPath_summary %>%
+  filter(confusion_term == "FN" & n_contributing_pathologists == 11) %>%
+  summarise(count = sum(count)) %>%
+  mutate(summary_type = "unequivocal_FN")
+
+# Calculate number of false predictions
+unequivocal_false_predictions <- bind_rows(unequivocal_FP, unequivocal_FN) %>%
+  summarise(count = sum(count)) %>%
+  mutate(summary_type = "unequivocal_false_predictions")
+
+
+# Combine all summaries into a single dataframe
+all_summaries <- bind_rows(false_predictions, FP_counts, FN_counts, equivocal_false_predictions, equivocal_FP, equivocal_FN, unequivocal_false_predictions, unequivocal_FP, unequivocal_FN) %>%
+  select(summary_type, count)
+
+# Write to Excel file
+write_xlsx(all_summaries, paste0(tables_dir,"confusionTerms_summary.xlsx"))
+```
+
+###Performance metrics (quick)
+Calculates sensitivity, positive predictive value and F1-score for all validation regions combined, and as summary stats per validation region 
+#### Input
+- Confusion terms at majority threshold (<output/lymphocyteValidation/all/confusionTerms_majority.rds>)
+- Confusion matrix at majority threshold (<output/lymphocyteValidation/all/confusionMatrix_majority.rds>)
+#### Output
+- Summary table with performance metrics per slides as excel  (<tables/performanceMetrics_bySlides.xslx>)
+- **Main Figure 7** Boxplots of performance metrics by slide
+ <figure/main/F7a_se_pathologistRank.tif>, <figure/main/F7b_ppv_pathologistRank.tif>, <figure/main/F7c_f1_pathologistRank.tif>, 
+ - **Main Figure 8** Sensitivity vs Positive predictive value plot <figure/main/F8_se_ppv_plot.tif>
+
+```{r}
+confusionTerms_majority <- readRDS(paste0(outputDir_all,"confusionTerms_majority.rds"))
+confusionMatrix_majority <- readRDS(paste0(outputDir_all,"confusionMatrix_majority.rds"))
+
+#Calculate performance metrics for all slides combined
+performanceMetrics_allSlide <- confusionTerms_majority %>%
+  group_by(classLabel) %>%
+  summarize(TP = sum(TP),
+            FP = sum(FP),
+            FN = sum(FN),
+            se = ifelse((TP + FN) > 0, TP / ((TP + FN))*100, NA),
+            ppv = ifelse((TP + FP) > 0, TP / ((TP + FP))*100, NA),
+            f1_score = ifelse(!is.na(se) & !is.na(ppv), 2 * (ppv * se) / (ppv + se), 100))%>%
+  ungroup() 
+
+# Visualize distributions
+plot_se_histo <- ggplot(confusionMatrix_majority, aes(x = se, fill = classLabel)) +
+  geom_histogram(position = "identity", color = "white", bins = 30) +
+  facet_grid(. ~ classLabel, labeller = labeller(classLabel = c("intraepithelial_lymphocytes" = "Intraepithelial", "lamina_propria_lymphocytes" = "Lamina propria"))) + 
+  scale_fill_manual(values = classLabel_palette) +
+  labs(x = "Sensitivity") +
+  theme_bw() +
+  theme(legend.position = "none", 
+        axis.text = element_text(size = 9, family = "Arial"),
+        strip.text = element_text(size = 8, family = "Arial")) # Set facet text to Arial, size 8
+
+
+plot_ppv_histo <- ggplot(confusionMatrix_majority, aes(x = ppv, fill = classLabel)) +
+  geom_histogram(position = "identity", color = "white", bins = 30) +
+  facet_grid(. ~ classLabel, labeller = labeller(classLabel = c("intraepithelial_lymphocytes" = "Intraepithelial", "lamina_propria_lymphocytes" = "Lamina propria"))) + 
+  scale_fill_manual(values = classLabel_palette) +
+  labs(x = "Positive predictive value") +
+  theme_bw() +
+  theme(legend.position = "none", 
+        axis.text = element_text(size = 9, family = "Arial"),
+        strip.text = element_text(size = 8, family = "Arial")) # Set facet text to Arial, size 8
+
+plot_f1_histo <- ggplot(confusionMatrix_majority, aes(x = f1_score, fill = classLabel)) +
+  geom_histogram(position = "identity", color = "white", bins = 30) +
+  facet_grid(. ~ classLabel, labeller = labeller(classLabel = c("intraepithelial_lymphocytes" = "Intraepithelial", "lamina_propria_lymphocytes" = "Lamina propria"))) + 
+  scale_fill_manual(values = classLabel_palette) +
+  labs(x = "F1-score") +
+  theme_bw() +
+  theme(legend.position = "none", 
+        axis.text = element_text(size = 9, family = "Arial"),
+        strip.text = element_text(size = 8, family = "Arial")) # Set facet text to Arial, size 8
+
+print(plot_se_histo)
+print(plot_ppv_histo)
+print(plot_f1_histo)
+
+#Summarize performance metrics across validation regions
+performanceMetrics_summaryBySlide <- confusionMatrix_majority %>%
+  group_by(classLabel) %>%
+  summarize(
+        se_median = median(se, na.rm = TRUE),
+        se_n = sum(!is.na(se)),
+        se_lower = quantile(se, 0.25, na.rm = TRUE),
+        se_upper = quantile(se, 0.75, na.rm = TRUE),
+        se_min = min(se, na.rm = TRUE),
+        se_max = max(se, na.rm = TRUE),
+        
+        ppv_median = median(ppv, na.rm = TRUE),
+        ppv_n = sum(!is.na(se)),
+        ppv_lower = quantile(ppv, 0.25, na.rm = TRUE),
+        ppv_upper = quantile(ppv, 0.75, na.rm = TRUE),
+        ppv_min = min(ppv, na.rm = TRUE),
+        ppv_max = max(ppv, na.rm = TRUE),
+        
+        f1_median = median(f1_score, na.rm = TRUE),
+        f1_n = sum(!is.na(f1_score)),
+        f1_lower = quantile(f1_score, 0.25, na.rm = TRUE),
+        f1_upper = quantile(f1_score, 0.75, na.rm = TRUE),
+        f1_min = min(f1_score, na.rm = TRUE),
+        f1_max = max(f1_score, na.rm = TRUE),
+        
+        TP = sum(TP),
+        FP = sum(FP),
+        FN = sum(FN),
+        confusionTerms = sum(TP, FP, FN)
+        )
+
+
+write_xlsx(performanceMetrics_summaryBySlide, paste0(tables_dir, "performanceMetrics_bySlides.xlsx"))
+
+
+#Boxplot for performance metrics summary by slide
+plot_se <- ggplot(confusionMatrix_majority, aes(x = "", y = se, fill = classLabel)) +
+  geom_boxplot() + 
+  facet_grid(. ~ classLabel, labeller = labeller(classLabel = c("intraepithelial_lymphocytes" = "Intraepithelial", "lamina_propria_lymphocytes" = "Lamina propria"))) + 
+  scale_fill_manual(values = classLabel_palette) +
+  labs(x = "",
+       y = "Sensitivity") +
+  theme_bw() +
+  theme_bw() +
+  theme(legend.position = "none", 
+        axis.text = element_text(size = 9, family = "Arial"),
+        axis.title = element_text(size = 9, family = "Arial"),
+        strip.text = element_text(size = 8, family = "Arial"), # Set facet text to Arial, size 9
+        axis.ticks.x = element_blank()) + # Remove x-axis ticks
+  scale_y_continuous(breaks = seq(0, 100, by = 25))  +  # Set y-axis breaks
+  ylim(0, 100)  # Set y-axis limits
+
+plot_ppv <- ggplot(confusionMatrix_majority, aes(x = "", y = ppv, fill = classLabel)) +
+  geom_boxplot() + 
+  facet_grid(. ~ classLabel, labeller = labeller(classLabel = c("intraepithelial_lymphocytes" = "Intraepithelial", "lamina_propria_lymphocytes" = "Lamina propria"))) + 
+  scale_fill_manual(values = classLabel_palette) +
+  labs(x = "",
+       y = "PPV") +
+  theme_bw() +
+  theme(legend.position = "none", 
+        axis.text = element_text(size = 9, family = "Arial"),
+        axis.title = element_text(size = 9, family = "Arial"),
+        strip.text = element_text(size = 8, family = "Arial"), # Set facet text to Arial, size 9
+        axis.ticks.x = element_blank()) + # Remove x-axis ticks
+  scale_y_continuous(breaks = seq(0, 100, by = 25))  +  # Set y-axis breaks
+  ylim(0, 100)  # Set y-axis limits
+
+plot_f1 <- ggplot(confusionMatrix_majority, aes(x = "", y = f1_score, fill = classLabel)) +
+  geom_boxplot() + 
+  facet_grid(. ~ classLabel, labeller = labeller(classLabel = c("intraepithelial_lymphocytes" = "Intraepithelial", "lamina_propria_lymphocytes" = "Lamina propria"))) + 
+  scale_fill_manual(values = classLabel_palette) +
+  labs(x = "",
+       y = "F1 score") +
+  theme_bw() +
+  theme(legend.position = "none", 
+        axis.text = element_text(size = 9, family = "Arial"),
+        axis.title = element_text(size = 9, family = "Arial"),
+        strip.text = element_text(size = 8, family = "Arial"), # Set facet text to Arial, size 9
+        axis.ticks.x = element_blank()) + # Remove x-axis ticks
+  scale_y_continuous(breaks = seq(0, 100, by = 25))  +  # Set y-axis breaks
+  ylim(0, 100)  # Set y-axis limits
+print(plot_se)
+print(plot_ppv)
+print(plot_f1)
+
+# Save the plots as a tif files
+output_file_tif_se <- paste0(mainFigures_dir,"F7a_se.tif")
+tiff(output_file_tif_se, width = 2.33, height = 2.33, units = "in", res = 300)
+print(plot_se)
+dev.off()
+
+output_file_tif_ppv <- paste0(mainFigures_dir,"F7b_ppv.tif")
+tiff(output_file_tif_ppv, width = 2.33, height = 2.33, units = "in", res = 300)
+print(plot_ppv)
+dev.off()
+
+output_file_tif_f1 <- paste0(mainFigures_dir,"F7c_f1.tif")
+tiff(output_file_tif_f1, width = 2.33, height = 2.33, units = "in", res = 300)
+print(plot_f1)
+dev.off()
+
+#Sensitivity/Positive predictive value plot
+confusionTerms_majority <- readRDS(paste0(outputDir_all,"confusionTerms_majority.rds"))
+
+confusion_terms_by_confidence <- NULL
+confusion_matrices_by_confidence <- NULL
+
+confidence_thresholds <- c( 40,  50,  60)
+
+confusionTerms_subset <- NULL
+confusionMatrix_subset <- NULL
+
+for (conf in confidence_thresholds){
+  conf_name <- as.character(conf)
+  confusionTerms_subset <- confusionTerms_majority %>%
+      mutate(
+             confidence_threshold = conf,
+             TP_old = TP,
+             FP_old = FP,
+             FN_old = FN,
+             TP_to_FN = ifelse(TP & confidence_percentage < conf, TRUE, FALSE),
+             FP_to_TN = ifelse(FP & (confidence_percentage < conf), TRUE, FALSE),
+             TP = TP_old - TP_to_FN,
+             FP = FP_old - FP_to_TN,
+             FN = FN_old + TP_to_FN)
+    
+    confusion_terms_by_confidence <- rbind(confusion_terms_by_confidence, confusionTerms_subset)
+    
+    confusionMatrix_subset <- confusionTerms_subset %>%
+      group_by(slideName, classLabel, confidence_threshold) %>%
+      
+      summarize(TP_count = sum(TP),
+                FP_count = sum(FP),
+                FN_count = sum(FN),
+                se = ifelse((TP_count + FN_count) > 0, (TP_count / (TP_count + FN_count))*100, NA),
+                ppv = ifelse((TP_count + FP_count) > 0, (TP_count / (TP_count + FP_count)) * 100, NA)) %>%
+      ungroup()
+    
+    confusion_matrices_by_confidence <- rbind(confusion_matrices_by_confidence, confusionMatrix_subset)
+}
+
+confusionMatrix_summary<- confusion_matrices_by_confidence %>%
+  group_by(classLabel, confidence_threshold) %>%
+  summarize(
+    se_median = median(se, na.rm = TRUE),
+    se_n = sum(!is.na(se)),
+    se_lower = quantile(se, 0.25, na.rm = TRUE),
+    se_upper = quantile(se, 0.75, na.rm = TRUE), 
+    se_min = ifelse(all(is.na(se)), NA, min(se, na.rm = TRUE)),
+    se_max = ifelse(all(is.na(se)), NA, max(se, na.rm = TRUE)),
+    
+    ppv_median = median(ppv, na.rm = TRUE),
+    ppv_n = sum(!is.na(ppv)),
+    ppv_lower = quantile(ppv, 0.25, na.rm = TRUE),
+    ppv_upper = quantile(ppv, 0.75, na.rm = TRUE), 
+    ppv_min = ifelse(all(is.na(ppv)), NA, min(ppv, na.rm = TRUE)),
+    ppv_max = ifelse(all(is.na(ppv)), NA, max(ppv, na.rm = TRUE))
+    ) %>%
+  ungroup()
+
+confidence_thresholds <- c( 40, 50, 60)
+
+
+#Filter out na values
+  
+confusionMatrix <- confusionMatrix_summary %>%
+  filter(!is.na(se_median)) %>%
+  filter(!is.na(ppv_median)) %>%
+  ungroup() %>%
+    select(classLabel, confidence_threshold, se_median, ppv_median)
+    
+# Create plot
+plot <- ggplot() +
+  
+geom_step(data = confusionMatrix_summary, aes(x = se_median, y = ppv_median, color = classLabel)) +
+  
+geom_point(size = 4, data = confusionMatrix_summary, aes(x = se_median, y = ppv_median, color = classLabel, shape = factor(confidence_threshold))) +
+  
+  scale_color_manual(values = classLabel_palette, name = "Class", labels = c("intraepithelial_lymphocytes" = "Intraepithelial", "lamina_propria_lymphocytes" = "Lamina propria")) +
+  
+  scale_x_continuous(limits = c(0, 100), breaks = seq(0, 100, by = 20)) +
+  scale_y_continuous(limits = c(0, 100), breaks = seq(0, 100, by = 20)) +
+  
+  theme_bw() +
+  theme(legend.position = "right",
+        axis.title = element_text(size = 9, family = "Arial"),
+        axis.text = element_text(size = 9, family = "Arial"),
+        legend.title = element_text(size = 9, family = "Arial"),
+        strip.text = element_text(size = 9, family = "Arial")) +
+  labs(
+    x = "Sensitivity",
+    y = "Positive predictive value",
+    shape = "Confidence threshold (%)"
+  ) +
+  facet_grid(. ~ classLabel, labeller = labeller(classLabel = c("intraepithelial_lymphocytes" = "Intraepithelial", "lamina_propria_lymphocytes" = "Lamina propria"))) 
+  
+print(plot)
+
+# Save the plots as a tif files
+output_file_tif <- paste0(mainFigures_dir,"F8_se_ppv_plot.tif")
+tiff(output_file_tif, width = 7, height = 2.33, units = "in", res = 300)
+print(plot)
+dev.off()
+```
+
+###Performance metrics by quality (quick)
+Merges confusion matrix with WSI quality data and generates some exploratory plots
+####Input 
+- WSI assessment frame <output/wsiAssessment/wsi_quality_origin.rds>
+- confusionMatrix (majority threshold) (<output/lymphocyteValidation/all/confusionMatrix_majority.rds>)
+####Output
+
+- **Supplemental figure 4 a-h** Performance by quality /lab <figure/supplementary/S4a_ppv_stain.tif> etc
+```{r}
+ROI_quality <- readRDS(inputDir_wsiAssessment)
+confusionMatrix_majority <- readRDS(paste0(outputDir_all,"confusionMatrix_majority.rds"))
+
+confusionMatrix_quality <- confusionMatrix_majority %>%
+  left_join(ROI_quality, by = "slideName")
+
+#se stain
+plot_se_stain <- ggplot(confusionMatrix_quality, aes(x = stain_quality, y = se, fill = classLabel)) +
+  geom_boxplot() + 
+  facet_grid(. ~ classLabel, labeller = labeller(classLabel = c("intraepithelial_lymphocytes" = "Intraepithelial", "lamina_propria_lymphocytes" = "Lamina propria"))) +
+  scale_fill_manual(values = classLabel_palette) +
+  labs(x = "Stain quality",
+       y = "Sensitivity") +
+  theme_bw() +
+  theme(legend.position = "none", 
+        axis.text = element_text(size = 9, family = "Arial"),
+        axis.title = element_text(size = 9, family = "Arial"),
+        strip.text = element_text(size = 8, family = "Arial"), # Set facet text to Arial, size 9
+        axis.ticks.x = element_blank()) + # Remove x-axis ticks
+  scale_y_continuous(breaks = seq(0, 100, by = 25))  +  # Set y-axis breaks
+  ylim(0, 100) +  # Set y-axis limits
+  scale_x_discrete(labels = c("adequate" = "Adequate", "suboptimal" = "Faded")) # Adjust x-axis labels
+
+
+print(plot_se_stain)
+output_file_tif_se_stain <- paste0(supplementaryFigures_dir,"S4a_se_stain.tif")
+tiff(output_file_tif_se_stain, width = 3.5, height = 1.4, units = "in", res = 300)
+print(plot_se_stain)
+dev.off()
+
+#ppv stain
+plot_ppv_stain <- ggplot(confusionMatrix_quality, aes(x = stain_quality, y = ppv, fill = classLabel)) +
+  geom_boxplot() + 
+  facet_grid(. ~ classLabel, labeller = labeller(classLabel = c("intraepithelial_lymphocytes" = "Intraepithelial", "lamina_propria_lymphocytes" = "Lamina propria"))) +
+  scale_fill_manual(values = classLabel_palette) +
+  labs(x = "Stain quality",
+       y = "PPV") +
+  theme_bw() +
+  theme(legend.position = "none", 
+        axis.text = element_text(size = 9, family = "Arial"),
+        axis.title = element_text(size = 9, family = "Arial"),
+        strip.text = element_text(size = 8, family = "Arial"), # Set facet text to Arial, size 9
+        axis.ticks.x = element_blank()) + # Remove x-axis ticks
+  scale_y_continuous(breaks = seq(0, 100, by = 25))  +  # Set y-axis breaks
+  ylim(0, 100) +  # Set y-axis limits
+  scale_x_discrete(labels = c("adequate" = "Adequate", "suboptimal" = "Faded")) # Adjust x-axis labels
+
+
+print(plot_ppv_stain)
+output_file_tif_ppv_stain <- paste0(supplementaryFigures_dir,"S4b_ppv_stain.tif")
+tiff(output_file_tif_ppv_stain, width = 3.5, height = 1.4, units = "in", res = 300)
+print(plot_ppv_stain)
+dev.off()
+
+
+#se focus
+plot_se_focus <- ggplot(confusionMatrix_quality, aes(x = focus, y = se, fill = classLabel)) +
+  geom_boxplot() + 
+  facet_grid(. ~ classLabel, labeller = labeller(classLabel = c("intraepithelial_lymphocytes" = "Intraepithelial", "lamina_propria_lymphocytes" = "Lamina propria"))) +
+  scale_fill_manual(values = classLabel_palette) +
+  labs(x = "Focus quality",
+       y = "Sensitivity") +
+  theme_bw() +
+  theme(legend.position = "none", 
+        axis.text = element_text(size = 9, family = "Arial"),
+        axis.title = element_text(size = 9, family = "Arial"),
+        strip.text = element_text(size = 8, family = "Arial"), # Set facet text to Arial, size 9
+        axis.ticks.x = element_blank()) + # Remove x-axis ticks
+  scale_y_continuous(breaks = seq(0, 100, by = 25))  +  # Set y-axis breaks
+  ylim(0, 100) +  # Set y-axis limits
+  scale_x_discrete(labels = c("adequate" = "Adequate", "suboptimal" = "Out of focus")) # Adjust x-axis labels
+
+
+print(plot_se_focus)
+output_file_tif_se_focus <- paste0(supplementaryFigures_dir,"S4c_se_focus.tif")
+tiff(output_file_tif_se_focus, width = 3.5, height = 1.4, units = "in", res = 300)
+print(plot_se_focus)
+dev.off()
+
+#ppv focus
+plot_ppv_focus <- ggplot(confusionMatrix_quality, aes(x = focus, y = ppv, fill = classLabel)) +
+  geom_boxplot() + 
+  facet_grid(. ~ classLabel, labeller = labeller(classLabel = c("intraepithelial_lymphocytes" = "Intraepithelial", "lamina_propria_lymphocytes" = "Lamina propria"))) +
+  scale_fill_manual(values = classLabel_palette) +
+  labs(x = "Focus quality",
+       y = "PPV") +
+  theme_bw() +
+  theme(legend.position = "none", 
+        axis.text = element_text(size = 9, family = "Arial"),
+        axis.title = element_text(size = 9, family = "Arial"),
+        strip.text = element_text(size = 8, family = "Arial"), # Set facet text to Arial, size 9
+        axis.ticks.x = element_blank()) + # Remove x-axis ticks
+  scale_y_continuous(breaks = seq(0, 100, by = 25))  +  # Set y-axis breaks
+  ylim(0, 100) +  # Set y-axis limits
+  scale_x_discrete(labels = c("adequate" = "Adequate", "suboptimal" = "Out of focus")) # Adjust x-axis labels
+
+
+print(plot_ppv_focus)
+output_file_tif_ppv_focus <- paste0(supplementaryFigures_dir,"S4d_ppv_focus.tif")
+tiff(output_file_tif_ppv_focus, width = 3.5, height = 1.4, units = "in", res = 300)
+print(plot_ppv_focus)
+dev.off()
+
+#se tissue
+plot_se_tissue <- ggplot(confusionMatrix_quality, aes(x = tissue_quality, y = se, fill = classLabel)) +
+  geom_boxplot() + 
+  facet_grid(. ~ classLabel, labeller = labeller(classLabel = c("intraepithelial_lymphocytes" = "Intraepithelial", "lamina_propria_lymphocytes" = "Lamina propria"))) +
+  scale_fill_manual(values = classLabel_palette) +
+  labs(x = "Tissue quality",
+       y = "Sensitivity") +
+  theme_bw() +
+  theme(legend.position = "none", 
+        axis.text = element_text(size = 9, family = "Arial"),
+        axis.title = element_text(size = 9, family = "Arial"),
+        strip.text = element_text(size = 8, family = "Arial"), # Set facet text to Arial, size 9
+        axis.ticks.x = element_blank()) + # Remove x-axis ticks
+  scale_y_continuous(breaks = seq(0, 100, by = 25))  +  # Set y-axis breaks
+  ylim(0, 100) +  # Set y-axis limits
+  scale_x_discrete(labels = c("adequate" = "Adequate", "suboptimal" = "Crushed")) # Adjust x-axis labels
+
+
+print(plot_se_tissue)
+output_file_tif_se_tissue <- paste0(supplementaryFigures_dir,"S4e_se_tissue.tif")
+tiff(output_file_tif_se_tissue, width = 3.5, height = 1.4, units = "in", res = 300)
+print(plot_se_tissue)
+dev.off()
+
+#ppv tissue
+plot_ppv_tissue <- ggplot(confusionMatrix_quality, aes(x = tissue_quality, y = ppv, fill = classLabel)) +
+  geom_boxplot() + 
+  facet_grid(. ~ classLabel, labeller = labeller(classLabel = c("intraepithelial_lymphocytes" = "Intraepithelial", "lamina_propria_lymphocytes" = "Lamina propria"))) +
+  scale_fill_manual(values = classLabel_palette) +
+  labs(x = "Tissue quality",
+       y = "PPV") +
+  theme_bw() +
+  theme(legend.position = "none", 
+        axis.text = element_text(size = 9, family = "Arial"),
+        axis.title = element_text(size = 9, family = "Arial"),
+        strip.text = element_text(size = 8, family = "Arial"), # Set facet text to Arial, size 9
+        axis.ticks.x = element_blank()) + # Remove x-axis ticks
+  scale_y_continuous(breaks = seq(0, 100, by = 25))  +  # Set y-axis breaks
+  ylim(0, 100) +  # Set y-axis limits
+  scale_x_discrete(labels = c("adequate" = "Adequate", "suboptimal" = "Crushed")) # Adjust x-axis labels
+
+
+print(plot_ppv_tissue)
+output_file_tif_ppv_tissue <- paste0(supplementaryFigures_dir,"S4f_ppv_tissue.tif")
+tiff(output_file_tif_ppv_tissue, width = 3.5, height = 1.4, units = "in", res = 300)
+print(plot_ppv_tissue)
+dev.off()
+
+#se lab
+plot_se_lab <- ggplot(confusionMatrix_quality, aes(factor(lab), y = se, fill = classLabel)) +
+  geom_boxplot() + 
+  facet_grid(. ~ classLabel, labeller = labeller(classLabel = c("intraepithelial_lymphocytes" = "Intraepithelial", "lamina_propria_lymphocytes" = "Lamina propria"))) +
+  scale_fill_manual(values = classLabel_palette) +
+  labs(x = "Lab",
+       y = "Sensitivity") +
+  theme_bw() +
+  theme(legend.position = "none", 
+        axis.text = element_text(size = 9, family = "Arial"),
+        axis.title = element_text(size = 9, family = "Arial"),
+        strip.text = element_text(size = 8, family = "Arial"), # Set facet text to Arial, size 9
+        axis.ticks.x = element_blank()) + # Remove x-axis ticks
+  scale_y_continuous(breaks = seq(0, 100, by = 25))  +  # Set y-axis breaks
+  ylim(0, 100)  # Set y-axis limits
+
+
+print(plot_se_lab)
+output_file_tif_se_lab <- paste0(supplementaryFigures_dir,"S4g_se_lab.tif")
+tiff(output_file_tif_se_lab, width = 7, height = 1.4, units = "in", res = 300)
+print(plot_se_lab)
+dev.off()
+
+#ppv lab
+plot_ppv_lab <- ggplot(confusionMatrix_quality, aes(x = factor(lab), y = ppv, fill = classLabel)) +
+  geom_boxplot() + 
+  facet_grid(. ~ classLabel, labeller = labeller(classLabel = c("intraepithelial_lymphocytes" = "Intraepithelial", "lamina_propria_lymphocytes" = "Lamina propria"))) +
+  scale_fill_manual(values = classLabel_palette) +
+  labs(x = "Lab",
+       y = "PPV") +
+  theme_bw() +
+  theme(legend.position = "none", 
+        axis.text = element_text(size = 9, family = "Arial"),
+        axis.title = element_text(size = 9, family = "Arial"),
+        strip.text = element_text(size = 8, family = "Arial"), # Set facet text to Arial, size 9
+        axis.ticks.x = element_blank()) + # Remove x-axis ticks
+  scale_y_continuous(breaks = seq(0, 100, by = 25))  +  # Set y-axis breaks
+  ylim(0, 100)   # Set y-axis limits
+
+
+print(plot_ppv_lab)
+output_file_tif_ppv_lab <- paste0(supplementaryFigures_dir,"S4h_ppv_lab.tif")
+tiff(output_file_tif_ppv_lab, width = 7, height = 1.4, units = "in", res = 300)
+print(plot_ppv_lab)
+dev.off()
+```
+
+### Generate spreadsheet for documenting unequivocally false predictions (quick)
+####Input: 
+- Confusion terms at majority threshold <output/lymphocyteValidation/all/confusionTerms_majority.rds>
+- WSI assessment frame <output/wsiAssessment/wsi_quality_origin.rds>
+#### Output
+- confusionTerms_quality <output/lymphocyteValidation/all/confusionTerms_quality.rds>
+- Excel sheet with unequivocal positive and negative for manual assessment <output/lymphocyteValidation/all/mispredictions_template.xlsx
+
+```{r spreadsheet for unequivocal false}
+#Merge confusion terms with quality data
+confusionTerms_majority <- readRDS(paste0(outputDir_all,"confusionTerms_majority.rds"))
+
+ROI_quality <- readRDS(inputDir_wsiAssessment)
+
+confusionTerms_quality <- confusionTerms_majority %>%
+  left_join(ROI_quality, by = "slideName")
+
+#Isolate unequivocal false positives
+ueFP<- confusionTerms_quality %>%
+  filter(FP == "1", n_contributing_pathologists == "0")
+
+ueFN<- confusionTerms_quality %>%
+  filter(FN == "1", n_contributing_pathologists == "11")
+
+ueFp_summary <- ueFP %>%
+  group_by(slideName, classLabel,stain_quality, tissue_quality, focus, lab) %>%
+  summarise(n_annotations = n()) 
+
+ueFN_summary <- ueFN %>%
+  group_by(slideName, classLabel,stain_quality, tissue_quality, focus, lab) %>%
+  summarise(n_annotations = n())
+
+
+ueFP_forMerge <- ueFP %>%
+  select(slideName, classLabel, confusion_term, quality_issue)
+ueFN_forMerge <- ueFN %>%
+  select(slideName, classLabel, confusion_term,  quality_issue)
+
+ueFP_FN <- bind_rows(ueFP, ueFN) %>%
+  select(slideName, classLabel, confusion_term, quality_issue)
+
+#Save excelsheet to use for manual evaluation
+write_xlsx(ueFP_FN, paste0(outputDir_all, "mispredictions_template.xlsx"))
+```
+
+### Explore unequivocally false predictions (quick)
+#### Input
+- Manually assessed unequivocally false predictions <input/unequivocally_falsePredictions/unequivocallyFalsePredictions.xlsx>
+#### Output
+- Summary table for unequivocally false <tables/unequivocallyFalse.xls>, 
+- Summary table for unequivocally mispredictions with lymphocyte errors
+- Summary table for unequivocally false positives with lymphocyte errors
+- Summary table for unequivocally false negatives with lymphocyte errors
+- Summary table for unequivocal mispredictions with mucosal errors
+-**Supplemental Figure S5** Sources of errors for unequivocal mispredictions.
+- **Supplemental Figure S6** Objects of confusion for unequivocal FPS.
+- **Supplemental Figure S7a-c** Quality of WSIs for unequivocal mispredictions with mucosal issues (a), FNs with lymphocyte issues (b) and FPs with lymphocyte issues (c)
+```{r}
+unequivocallyFalse <-read_excel(inputDir_unequivocallyFalse) 
+
+#Plot unequivocal Falses by issue  
+desired_order <- c( "off_target_annotation","clustering" , "roi_border", "mucosal_model", "lymphocyte_model" )
+
+ueF_summary <- unequivocallyFalse %>%
+  summarise(
+    count = n(),
+    mucosal_model_issue_count = sum(issue == "mucosal_model"),
+    mucosal_model_issue_percentage = (mucosal_model_issue_count / count) *100,
+    lymphocyte_model_issue_count = sum(issue == "lymphocyte_model"),
+    lymphocyte_model_issue_percentage = (lymphocyte_model_issue_count / count) * 100,
+    roi_border_issue_count = sum(issue == "roi_border"),
+    roi_border_issue_percentage = (roi_border_issue_count / count) *100,
+    clustering_issue_count = sum(issue == "clustering"),
+    clustering_issue_percentage = (clustering_issue_count / count) *100,
+    off_target_annotation_issue_count = sum(issue == "off_target_annotation"),
+    off_target_annotation_issue_percentage = (off_target_annotation_issue_count / count) *100,
+    quality_control_percentage = mucosal_model_issue_percentage + lymphocyte_model_issue_percentage +   roi_border_issue_percentage + clustering_issue_percentage + off_target_annotation_issue_percentage,
+    technical_issues_count = clustering_issue_count + off_target_annotation_issue_count + roi_border_issue_count,
+    technical_issues_percentage = clustering_issue_percentage + off_target_annotation_issue_percentage +  roi_border_issue_percentage)
+
+print(ueF_summary)
+
+write_xlsx(ueF_summary,paste0(tables_dir, "unequivocallyFalse_summaryTable.xlsx"))
+
+# Convert the "issue" variable to a factor with the desired order
+unequivocallyFalse$issue <- factor(unequivocallyFalse$issue, levels = desired_order)
+
+plot <- ggplot(unequivocallyFalse, aes(x = "", fill = issue)) +
+  geom_bar(position = "fill") +  # Use position = "fill" to display percentages
+  labs(x = "Unequivocal mispredictions", y = "Percentage") +  # Change y-axis label to "Percentage"
+  scale_fill_manual(values = issue_color_scale, name = "Error source", labels = issueLabel) +
+  scale_y_continuous(labels = scales::percent_format(scale = 100)) +  # Convert y-axis labels to percentages
+  theme_bw() +
+  theme(legend.position = "right", 
+        legend.box = "horizontal",  # Display legend items vertically
+        legend.direction = "vertical",  # Adjust the direction of legend items
+        legend.key.height = unit(0.1, "in"),  # Adjust the height of the legend key
+        legend.key.width = unit(0.1, "in"),  # Adjust the width of the legend key
+        legend.spacing.y = unit(0.05, "in"),  # Adjust the vertical spacing 
+        axis.text.x = element_blank(),  # Remove x-axis text labels
+        axis.ticks.x = element_blank(),  # Remove x-axis ticks
+        axis.text = element_text(size = 9, family = "Arial"),
+        axis.title = element_text(size = 9, family = "Arial"),
+        strip.text = element_text(size = 9, family = "Arial"),
+        legend.title = element_text(size = 9, family = "Arial")) 
+
+print(plot) # Display the plot
+
+output_file_tif<- paste0(supplementaryFigures_dir,"S5_unequivocallyFalse_categories.tif")
+tiff(output_file_tif, width = 3.5, height = 2.33, units = "in", res = 300)
+print(plot)
+dev.off()
+
+
+ueF_lc <- unequivocallyFalse %>% filter(issue == "lymphocyte_model") 
+
+
+
+n_unique_slides_lc_issue <- unique(ueF_lc$slideName)
+print(length(n_unique_slides_lc_issue))
+
+ueF_lc_summary <- ueF_lc %>%
+  summarise(
+    count = n(),
+    FP_count = sum(confusion_term == "FP"),
+    FP_percentage = (FP_count / count) *100,
+    FN_count = sum(confusion_term == "FN"),
+    FN_percentage = (FN_count / count) *100)
+    
+write_xlsx(ueF_lc_summary,paste0(tables_dir, "unequivocallyFalse_lymphocytesummary.xlsx"))
+
+plot <- ggplot(ueF_lc, aes(x = "", fill = factor(confusion_term))) +
+  geom_bar(position = "fill") +
+  labs(x = "Unequivocally false \nwith lymphocyte model issue", y = "Percentage") +
+  scale_fill_brewer(palette = "Paired", name = "Category") + 
+  theme_bw() +
+  theme(legend.position = "right", 
+        legend.box = "horizontal",  # Display legend items vertically
+        legend.direction = "vertical",  # Adjust the direction of legend items
+        legend.key.height = unit(0.1, "in"),  # Adjust the height of the legend key
+        legend.key.width = unit(0.1, "in"),  # Adjust the width of the legend key
+        legend.spacing.y = unit(0.05, "in"),  # Adjust the vertical spacing 
+        #axis.text.x = element_blank(),  # Remove x-axis text labels
+        #axis.ticks.x = element_blank(),  # Remove x-axis ticks
+        axis.text = element_text(size = 9, family = "Arial"),
+        axis.title = element_text(size = 9, family = "Arial"),
+        strip.text = element_text(size = 9, family = "Arial"),
+        legend.title = element_text(size = 9, family = "Arial")) 
+
+  # Print the plot
+print(plot)
+
+#Explore Unequivocal FPs
+ueFP_lc <- ueF_lc %>% filter(confusion_term == "FP") 
+
+
+ueFP_lc_summary <- ueFP_lc %>%
+  summarise(
+    count = n(),
+    epithelium_count = sum(object == "epithelial_nucleus"),
+    epithelium_percent = (epithelium_count / count) * 100,
+    goblet_cell_count = sum(object == "goblet_cell"),
+    goblet_cell_percent = (goblet_cell_count / count) * 100,
+    plasma_cell_count = sum(object == "plasma_cell"),
+    plasma_cell_percent = (plasma_cell_count / count) * 100,
+    pen_mark_count = sum(object == "pen_mark"),
+    pen_mark_percent = (pen_mark_count / count) * 100,
+    lymphocyte_double_count = sum(object == "lymphocyte_double"),
+    lymphocyte_double_percent = (lymphocyte_double_count / count) * 100,
+    unknown_count = sum(object == "unknown"),
+    unknown_percent = (unknown_count / count) * 100,
+    control_cell_percentage = epithelium_percent + goblet_cell_percent + plasma_cell_percent +lymphocyte_double_percent +unknown_percent,
+    adequate_quality_count = sum(quality_issue== "none"),
+    adequate_quality_percentage = (adequate_quality_count / count) *100,
+    suboptimal_quality_count = sum(quality_issue != "none"),
+    suboptimal_quality_percentage = (suboptimal_quality_count / count) *100,
+    suboptimal_stain_count = sum(quality_issue== "stain"),
+    suboptimal_stain_percentage = (suboptimal_stain_count / count) *100,
+    suboptimal_stain_and_focus_count = sum(quality_issue== "stain and focus"),
+    suboptimal_stain_and_focus_percentage = (suboptimal_stain_and_focus_count / count) *100,
+    suboptimal_stain_tissue_and_focus_count = sum(quality_issue== "stain, tissue and focus"),
+    suboptimal_stain_tissue_and_focus_percentage = (suboptimal_stain_tissue_and_focus_count / count) *100,
+    suboptimal_stain_and_tissue_count = sum(quality_issue== "stain and tissue"),
+    suboptimal_stain_and_tissue_percentage = (suboptimal_stain_and_tissue_count / count) *100,
+    suboptimal_focus_count = sum(quality_issue== "focus"),
+    suboptimal_focus_percentage = (suboptimal_focus_count / count) *100,
+    suboptimal_tissue_and_focus_count = sum(quality_issue== "tissue and focus"),
+    suboptimal_tissue_and_focus_percentage = (suboptimal_tissue_and_focus_count / count) *100,
+    suboptimal_tissue_count = sum(quality_issue== "tissue"),
+    suboptimal_tissue_percentage = (suboptimal_tissue_count / count) *100,
+    control_quality_percentage = adequate_quality_percentage + suboptimal_stain_percentage +suboptimal_stain_and_focus_percentage +suboptimal_stain_tissue_and_focus_percentage + suboptimal_stain_and_tissue_percentage+ suboptimal_focus_percentage + suboptimal_tissue_and_focus_percentage+ suboptimal_tissue_percentage)
+
+write_xlsx(ueFP_lc_summary,paste0(tables_dir, "ueFP_lc_summary.xlsx"))
+
+#Plot unequivocal Falses with mucosal issues  by quality issue  
+desired_order <- c("pen_mark", "lymphocyte_double", "plasma_cell", "goblet_cell", "epithelial_nucleus", "unknown")
+
+
+# Convert the "cell" variable to a factor with the desired order
+ueFP_lc$object <- factor(ueFP_lc$object, levels = desired_order)
+
+
+plot <- ggplot(ueFP_lc, aes(x = "", fill = factor(object))) +
+  geom_bar(position = "fill") +
+  labs(x = "Unequivocally false positive\nwith lymphocyte model issues", y = "Percentage", fill = "Object") +
+  scale_fill_manual(values = brewer.pal(8, "Pastel2"), labels = c("pen_mark" = "Pen mark", "lymphocyte_double" = "Double prediction", "plasma_cell" = "Plasma cell", "goblet_cell" = "Goblet cell nucleus", "epithelial_nucleus" = "Epithelial nucleus", "unknown" = "Unknown")) +
+  scale_y_continuous(labels = scales::percent_format(scale = 100)) +
+  theme_bw() +
+  theme(legend.position = "right", 
+        legend.box = "horizontal",  # Display legend items vertically
+        legend.direction = "vertical",  # Adjust the direction of legend items
+        legend.key.height = unit(0.1, "in"),  # Adjust the height of the legend key
+        legend.key.width = unit(0.1, "in"),  # Adjust the width of the legend key
+        legend.spacing.y = unit(0.05, "in"),  # Adjust the vertical spacing 
+        axis.text.x = element_blank(),  # Remove x-axis text labels
+        axis.ticks.x = element_blank(),  # Remove x-axis ticks
+        axis.text = element_text(size = 9, family = "Arial"),
+        axis.title = element_text(size = 9, family = "Arial"),
+        strip.text = element_text(size = 9, family = "Arial"),
+        legend.title = element_text(size = 9, family = "Arial")) 
+
+
+  # Print the plot
+print(plot)
+
+output_file_tif<- paste0(supplementaryFigures_dir,"S6_unequivocalFP_objects.tif")
+tiff(output_file_tif, width = 3.5, height = 2.33, units = "in", res = 300)
+print(plot)
+dev.off()
+
+
+ueF_mucosal <- unequivocallyFalse %>% filter(issue == "mucosal_model")
+
+
+n_unique_slides_mucosal_issue <- unique(ueF_mucosal$slideName)
+print(length(n_unique_slides_mucosal_issue))
+
+
+ueF_mucosal_summary <- ueF_mucosal %>%
+  summarise(
+    count = n(),
+    adequate_quality_count = sum(quality_issue== "none"),
+    adequate_quality_percentage = (adequate_quality_count / count) *100,
+    suboptimal_quality_count = sum(quality_issue != "none"),
+    suboptimal_quality_percentage = (suboptimal_quality_count / count) *100,
+    suboptimal_stain_count = sum(quality_issue== "stain"),
+    suboptimal_stain_percentage = (suboptimal_stain_count / count) *100,
+    suboptimal_stain_and_focus_count = sum(quality_issue== "stain and focus"),
+    suboptimal_stain_and_focus_percentage = (suboptimal_stain_and_focus_count / count) *100,
+    #suboptimal_stain_and_tissue_count = sum(quality_issue== "stain and tissue"),
+    #suboptimal_stain_and_tissue_percentage = (suboptimal_stain_and_tissue_count / count) *100,
+    suboptimal_focus_count = sum(quality_issue== "focus"),
+    suboptimal_focus_percentage = (suboptimal_focus_count / count) *100,
+    suboptimal_tissue_and_focus_count = sum(quality_issue== "tissue and focus"),
+    suboptimal_tissue_and_focus_percentage = (suboptimal_tissue_and_focus_count / count) *100,
+    suboptimal_tissue_count = sum(quality_issue== "tissue"),
+    suboptimal_tissue_percentage = (suboptimal_tissue_count / count) *100,
+    control_percentage = adequate_quality_percentage + suboptimal_stain_percentage +suboptimal_stain_and_focus_percentage +suboptimal_focus_percentage + suboptimal_tissue_and_focus_percentage +suboptimal_tissue_percentage)
+
+write_xlsx(ueF_mucosal_summary,paste0(tables_dir, "ueF_mucosal_summary.xlsx"))
+
+#Plot unequivocal Falses with mucosal issues  by quality issue  
+desired_order <- c("none", "stain", "focus", "tissue", "stain and focus", "stain and tissue", "tissue and focus", "stain, tissue and focus")
+
+# Convert the "issue" variable to a factor with the desired order
+ueF_mucosal$quality_issue <- factor(ueF_mucosal$quality_issue, levels = desired_order)
+
+
+plot <- ggplot(ueF_mucosal, aes(x = "", fill = factor(quality_issue))) +
+  geom_bar(position = "fill") +
+  labs(x = "Unequivocal mispredictions\nmucosal model issues", y = "Percentage") +
+  scale_fill_manual(values = quality_palette, name = "Quality", labels = quality_labels) +
+  scale_y_continuous(labels = scales::percent_format(scale = 100)) +
+  theme_bw() +
+  theme(legend.position = "right", 
+        legend.box = "horizontal",  # Display legend items vertically
+        legend.direction = "vertical",  # Adjust the direction of legend items
+        legend.key.height = unit(0.1, "in"),  # Adjust the height of the legend key
+        legend.key.width = unit(0.1, "in"),  # Adjust the width of the legend key
+        legend.spacing.y = unit(0.05, "in"),  # Adjust the vertical spacing 
+        axis.text.x = element_blank(),  # Remove x-axis text labels
+        axis.ticks.x = element_blank(),  # Remove x-axis ticks
+        axis.text = element_text(size = 9, family = "Arial"),
+        axis.title = element_text(size = 9, family = "Arial"),
+        strip.text = element_text(size = 9, family = "Arial"),
+        legend.title = element_text(size = 9, family = "Arial")) 
+
+  # Print the plot
+print(plot)
+
+output_file_tif<- paste0(supplementaryFigures_dir,"S7a_ueFmucosaQuality.tif")
+tiff(output_file_tif, width = 3.5, height = 2.33, units = "in", res = 300)
+print(plot)
+dev.off()
+
+#Explore UE fn with lymphocyte issues
+ueFN_lc <- ueF_lc %>% filter(confusion_term == "FN") 
+
+ueFN_lc_summary <- ueFN_lc %>%
+  summarise(
+    count = n(),
+    adequate_quality_count = sum(quality_issue== "none"),
+    adequate_quality_percentage = (adequate_quality_count / count) *100,
+    suboptimal_quality_count = sum(quality_issue != "none"),
+    suboptimal_quality_percentage = (suboptimal_quality_count / count) *100,
+    suboptimal_stain_count = sum(quality_issue== "stain"),
+    suboptimal_stain_percentage = (suboptimal_stain_count / count) *100,
+    suboptimal_stain_and_focus_count = sum(quality_issue== "stain and focus"),
+    suboptimal_stain_and_focus_percentage = (suboptimal_stain_and_focus_count / count) *100,
+    suboptimal_stain_tissue_and_focus_count = sum(quality_issue== "stain, tissue and focus"),
+    suboptimal_stain_tissue_and_focus_percentage = (suboptimal_stain_tissue_and_focus_count / count) *100,
+    #suboptimal_stain_and_tissue_count = sum(quality_issue== "stain and tissue"),
+    #suboptimal_stain_and_tissue_percentage = (suboptimal_stain_and_tissue_count / count) *100,
+    suboptimal_focus_count = sum(quality_issue== "focus"),
+    suboptimal_focus_percentage = (suboptimal_focus_count / count) *100,
+    suboptimal_tissue_and_focus_count = sum(quality_issue== "tissue and focus"),
+    suboptimal_tissue_and_focus_percentage = (suboptimal_tissue_and_focus_count / count) *100,
+    #suboptimal_tissue_count = sum(quality_issue== "tissue"),
+    #suboptimal_tissue_percentage = (suboptimal_tissue_count / count) *100,
+    control_percentage = adequate_quality_percentage + suboptimal_stain_percentage +suboptimal_stain_and_focus_percentage + suboptimal_stain_tissue_and_focus_percentage + suboptimal_focus_percentage + suboptimal_tissue_and_focus_percentage)
+
+write_xlsx(ueFN_lc_summary,paste0(tables_dir, "ueFN_lc_summary.xlsx"))
+#Plot unequivocal Falses with mucosal issues  by quality issue  
+desired_order <- c("none", "stain", "focus", "tissue", "stain and focus", "stain and tissue", "tissue and focus", "stain, tissue and focus")
+
+# Convert the "issue" variable to a factor with the desired order
+ueFN_lc$quality_issue <- factor(ueFN_lc$quality_issue, levels = desired_order)
+
+
+plot <- ggplot(ueFN_lc, aes(x = "", fill = factor(quality_issue))) +
+  geom_bar(position = "fill") +
+  labs(x = "Unequivocally false negatives\nlymphocyte model issues", y = "percentage", fill = "quality issue") +
+ scale_fill_manual(values = quality_palette, name = "Quality", labels = quality_labels) +
+  scale_y_continuous(labels = scales::percent_format(scale = 100)) +
+  theme_bw() +
+  theme(legend.position = "right", 
+        legend.box = "horizontal",  # Display legend items vertically
+        legend.direction = "vertical",  # Adjust the direction of legend items
+        legend.key.height = unit(0.1, "in"),  # Adjust the height of the legend key
+        legend.key.width = unit(0.1, "in"),  # Adjust the width of the legend key
+        legend.spacing.y = unit(0.05, "in"),  # Adjust the vertical spacing 
+        axis.text.x = element_blank(),  # Remove x-axis text labels
+        axis.ticks.x = element_blank(),  # Remove x-axis ticks
+        axis.text = element_text(size = 9, family = "Arial"),
+        axis.title = element_text(size = 9, family = "Arial"),
+        strip.text = element_text(size = 9, family = "Arial"),
+        legend.title = element_text(size = 9, family = "Arial")) 
+print(plot)
+
+output_file_tif<- paste0(supplementaryFigures_dir,"S7b_ueFN_lcQuality.tif")
+tiff(output_file_tif, width = 3.5, height = 2, units = "in", res = 300)
+print(plot)
+dev.off()
+
+
+#Plot unequivocal FP with lcissues  by quality issue  
+desired_order <- c("none", "stain", "focus", "tissue", "stain and focus", "stain and tissue", "tissue and focus", "stain, tissue and focus")
+
+# Convert the "issue" variable to a factor with the desired order
+ueFP_lc$quality_issue <- factor(ueFP_lc$quality_issue, levels = desired_order)
+
+
+plot <- ggplot(ueFP_lc, aes(x = "", fill = factor(quality_issue))) +
+  geom_bar(positon = "fill") +
+  labs(x = "Unequivocally false positives\nlymphocyte model issues", y = "Percentage") +
+  scale_fill_manual(values = quality_palette, name = "Quality", labels = quality_labels) +
+  scale_y_continuous(labels = scales::percent_format(scale = 100)) +
+  theme_bw() +
+  theme(legend.position = "right", 
+        legend.box = "horizontal",  # Display legend items vertically
+        legend.direction = "vertical",  # Adjust the direction of legend items
+        legend.key.height = unit(0.1, "in"),  # Adjust the height of the legend key
+        legend.key.width = unit(0.1, "in"),  # Adjust the width of the legend key
+        legend.spacing.y = unit(0.05, "in"),  # Adjust the vertical spacing 
+        axis.text.x = element_blank(),  # Remove x-axis text labels
+        axis.ticks.x = element_blank(),  # Remove x-axis ticks
+        axis.text = element_text(size = 9, family = "Arial"),
+        axis.title = element_text(size = 9, family = "Arial"),
+        strip.text = element_text(size = 9, family = "Arial"),
+        legend.title = element_text(size = 9, family = "Arial")) 
+print(plot)
+
+output_file_tif<- paste0(supplementaryFigures_dir,"S7c_ueFP_lcQuality.tif")
+tiff(output_file_tif, width = 3.5, height = 2.33, units = "in", res = 300)
+print(plot)
+dev.off()
+```
+
+

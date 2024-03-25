@@ -1,0 +1,126 @@
+---
+title: "wsiAssessment"
+author: "Wulcan"
+date: "2024-03-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+### Objective
+Compare AI-generated lymphocyte densities to pathologists semiquantitaitve grades per WSI.
+
+#### Input
+-Parsed semiquantiative grades for intraepithelial lymphocytes <output/wsiAssessment/intraEpithelial_lymphocytes.rds>
+-Parsed semiquantiative grades for lamina propria lymphocytes and plasma cells <output/wsiAssessment/laminaPropria_lymphocytesPlasmacells.rds>
+- AI-derived lymphocyte quantifications </output/mergeModels/all/slideSummary_2024-03-06.rds>
+
+#### Output
+**Figure 14** AI-derived lymphocyte counts by semiquantitative grade
+
+```{r load libraries}
+library(tidyverse)
+options(scipen = 999) #turn of scientific notation
+library(ggbeeswarm)
+```
+
+### Set batch name and directories
+```{r set batch name and directories}
+batch <- "test_set_AIFeBx_paper"
+
+top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/supplementary_data/" #jmwMacBook
+#top_dir <- "C:/Users/jmwulcan/Box/Projects/AI/paper/supplementary_data/" #jmwDell
+#top_dir <- "C:/Users/15303/Box/Projects/paper/supplementary_data/" #JMW lenovo
+
+inputDir_sQuant <- paste0(top_dir, batch,"/output/wsiGrades_parsed/")
+
+inputDir_AIquant <- paste0(top_dir,batch,"/output/mergeModels/all/slideSummary_2024-03-06.rds")
+
+#Set output directory 
+outputDir_AI_vsPath <-paste0(top_dir, batch,"/output/wsiAI_vs_path/" )
+
+classLabel_palette <- c("Intraepithelial lymphocytes" = "#FA8533","Lamina propria lymphocytes and plasma cells" =  "#3282Bd")
+
+mainFigures_dir <- paste0(top_dir,batch,"/figures/main/")  
+```
+
+
+```{r average}
+ie_lc <- readRDS(paste0(inputDir_sQuant,"intraEpithelial_lymphocytes.rds"))
+lp_lcPc <- readRDS(paste0(inputDir_sQuant,"laminaPropria_lymphocytesPlasmacells.rds"))
+
+
+#Add medians
+ie_lc <- ie_lc %>%
+  rowwise() %>%
+  mutate(median_grade = median(c_across(starts_with("p"))),
+          class_label = "Intraepithelial lymphocytes")
+
+lp_lcPc <- lp_lcPc %>%
+  rowwise() %>%
+  mutate(median_grade = median(c_across(starts_with("p"))),
+         class_label = "Lamina propria lymphocytes and plasma cells")
+      
+
+
+
+aiData <- readRDS(inputDir_AIquant)
+
+
+
+
+ie_lc_full <- full_join(ie_lc, aiData, by = "slide_name") %>%
+  select(slide_name:class_label, epithelium_lcDensity_1000um2_median, epithelium_lcDensity_1000um2_min, epithelium_lcDensity_1000um2_max, epithelium_lcDensity_1000um2_lower_quantile, epithelium_lcDensity_1000um2_upper_quantile, epithelium_lcDensity_1000um2_range, epithelium_lcDensity_1000um2_iqr) %>%
+  rename(density_1000um2_median = epithelium_lcDensity_1000um2_median,
+         density_1000um2_min = epithelium_lcDensity_1000um2_min, 
+         density_1000um2_max = epithelium_lcDensity_1000um2_max,
+         density_1000um2_lower_quantile = epithelium_lcDensity_1000um2_lower_quantile,
+         density_1000um2_upper_quantile = epithelium_lcDensity_1000um2_upper_quantile, 
+         density_1000um2_range = epithelium_lcDensity_1000um2_range,
+         density_1000um2_iqr = epithelium_lcDensity_1000um2_iqr)
+
+lp_lcPc_full <- full_join(lp_lcPc, aiData, by = "slide_name") %>%
+  select(slide_name:class_label, lamina_propria_lcDensity_1000um2_median, lamina_propria_lcDensity_1000um2_min, lamina_propria_lcDensity_1000um2_max, lamina_propria_lcDensity_1000um2_lower_quantile, lamina_propria_lcDensity_1000um2_upper_quantile, lamina_propria_lcDensity_1000um2_range, lamina_propria_lcDensity_1000um2_iqr) %>%
+  rename(density_1000um2_median = lamina_propria_lcDensity_1000um2_median,
+         density_1000um2_min = lamina_propria_lcDensity_1000um2_min, 
+         density_1000um2_max = lamina_propria_lcDensity_1000um2_max,
+         density_1000um2_lower_quantile = lamina_propria_lcDensity_1000um2_lower_quantile,
+         density_1000um2_upper_quantile = lamina_propria_lcDensity_1000um2_upper_quantile, 
+         density_1000um2_range = lamina_propria_lcDensity_1000um2_range,
+         density_1000um2_iqr = lamina_propria_lcDensity_1000um2_iqr)
+
+
+wsi_validationData <- rbind(ie_lc_full, lp_lcPc_full) 
+
+#Save rds 
+saveRDS(wsi_validationData, paste0(outputDir_AI_vsPath,"WSI_validationData.rds"))
+
+
+#Plot concordance
+
+plot <- ggplot(wsi_validationData, aes(x = median_grade, y = density_1000um2_median)) +
+  geom_beeswarm(alpha = 0.7, aes(color = class_label)) +
+  geom_boxplot(aes(group = median_grade), alpha = 0) +
+  facet_wrap(~class_label, scales = "free_y") +
+  scale_color_manual(values = classLabel_palette, name = "Class" ) +
+
+ 
+  labs(
+       x = "Semiquantiative grade",
+       y = "Lymphocytes/1000um2")+
+  theme_bw() +
+  theme(legend.position = "none", 
+        axis.text = element_text(size = 9, family = "Arial")) 
+  
+print(plot)
+
+output_file_tif <- paste0(mainFigures_dir,"F14_compare.tif")
+tiff(output_file_tif, width = 7, height = 3.5, units = "in", res = 300)
+print(plot)
+dev.off()
+
+
+``

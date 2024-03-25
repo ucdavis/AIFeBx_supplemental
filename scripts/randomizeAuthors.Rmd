@@ -1,0 +1,21 @@
+---
+title: "randomizeAuthors"
+author: "Wulcan"
+date: "2024-03-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Objective
+Randomize the order of co-authors of equal contributors for the manuscript
+```{r randomise coauthor order}
+set.seed(567)
+coAuthors <- c("TD", "TW", "NS", "PR", "PG", "EC", "SF", "PB", "CB", "SD", "IC")
+
+randomized_coAuthors <- sample(coAuthors)
+
+print(randomized_coAuthors)
+```

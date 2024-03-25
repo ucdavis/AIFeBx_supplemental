@@ -1,0 +1,269 @@
+---
+title: "wsi_qualityAssesment"
+author: "Wulcan"
+date: "2024-03-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Objective
+Summarize manual assessment of WSIs 
+
+## Input
+"WSI_Assessment" - excel spreadsheet manual assessments of quality variables of all slides in test set 
+
+##  Output
+- "wsi quality origin" Data frame with quality variables, and submitting laboratory data <output/wsiAssessment/wsi_quality_origin.rds>
+- "wsi assess summary" - Dataframe with summary datafor test set (data used in materials and methods section of paper) <output/wsiAssessment/wsi_assesment_summary.rds>
+- **Figure 3a-c** Stack and bar plots for test sets wsis <figures/main/3a_lab.tif>; <figures/main/S3b_type.tif>; <figures/main/3c_quality.tif>; 
+
+```{r load libraries}
+library(tidyverse)
+options(scipen = 999) #turn of scientific notation
+library(readxl) #slide names as csv file changes the name of 96e4 to scientific notation
+library(ggbeeswarm)
+library(writexl)
+```
+
+### Set batch name and directories
+```{r set batch name and directories}
+batch <- "test_set_AIFeBx_paper"
+
+top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/supplementary_data/" #jmwMacBook
+#top_dir <- "C:/Users/jmwulcan/Box/Projects/AI/paper/supplementary_data/" #jmwDell
+#top_dir <- "C:/Users/15303/Box/Projects/paper/supplementary_data/" #JMW lenovo
+
+#Set current date
+currentDate <- format(Sys.Date(), format = "%Y-%m-%d")
+
+#Input directories 
+inputDir_WSIassess <- paste0(top_dir, batch, "/input/wsi_assessments/WSI_assessment.xlsx")
+inputDir_WSIorigin <- paste0(top_dir, batch, "/input/wsi_assessments/WSI_origin.xlsx")
+
+#Output directory 
+wsiAssessment_dir <- paste0(top_dir, batch, "/output/wsiAssessment/")
+mainFigures_dir <- paste0(top_dir,batch,"/figures/main/")
+
+quality_palette = c("none" = "#1B9E77", 
+                   "stain" =  "#C16610", 
+                   "focus" =  "#8D6B86", 
+                   "tissue" = "#BC4399", 
+                   "stain and focus" = "#A66753",  
+                   "stain and tissue" =  "#96A713" , 
+                   "stain and tissue" = "#D59D08", 
+                   "tissue and focus" =   "#9D7426", 
+                   "stain, tissue and focus" =  "#666666")
+
+
+quality_labels = c("none" = "Adequate quality", 
+                   "stain" = "Faded stain", 
+                   "focus" = "Out of focus", 
+                   "tissue" = "Crushed tissue", 
+                   "stain and focus" = "Faded stain &\nout of focus", 
+                   "stain and tissue" = "Faded stain &\ncrushed tissue", 
+                   "stain and tissue" = "Faded stain &\ncrushed tissue", 
+                   "tissue and focus" = "Crushed tissue &\nout of focus", 
+                   "stain, tissue and focus" = "Faded stain &\ncrushed tissue &\nout of focus")
+```
+
+### Parse WSIs
+Parse excel sheets with quality assessment data and lab origin data, and merge them
+```{r parse WSI}
+
+#Read in raw data
+WSI_assess_raw <- read_excel(inputDir_WSIassess)
+WSI_origin_raw <- read_excel(inputDir_WSIorigin)
+
+#Parse wsi assess
+
+WSI_assess_parsed <- WSI_assess_raw %>%
+  mutate(stain_quality = ifelse(faded, "suboptimal", "adequate"),
+         tissue_quality = ifelse(crushed_distorted, "suboptimal", "adequate"),
+         focus = ifelse(blurry, "suboptimal", "adequate"),
+         ) %>%
+  rename(slideName = slide_name) %>%
+  select(slideName, biopsy_type, stain_quality, tissue_quality, focus, comment)
+
+#parse wsi origin
+WSI_origin_parsed <- WSI_origin_raw %>%
+  filter(!is.na(SlideName), Exclusion == "NA", Use == "Test") %>%
+  rename(slideName = SlideName,
+         lab = Lab) %>%
+  select(slideName, lab)
+
+#Join lab origin data with assessment data
+wsi_quality_origin <- left_join(WSI_assess_parsed, WSI_origin_parsed)
+
+##Add columns for overall quality and quality issue
+wsi_quality_origin <- wsi_quality_origin %>%
+  mutate(quality = ifelse(stain_quality == "adequate" & tissue_quality == "adequate" & focus == "adequate", "ok", "poor"),
+         quality_issue = case_when(
+           stain_quality == "adequate" & tissue_quality == "adequate" & focus == "adequate" ~ "none",
+           
+           stain_quality == "suboptimal" & tissue_quality == "suboptimal" & focus == "suboptimal" ~ "stain, tissue and focus",
+           
+           stain_quality == "suboptimal" & tissue_quality == "adequate" & focus == "suboptimal" ~ "stain and focus",
+           
+           stain_quality == "suboptimal" & tissue_quality == "suboptimal" & focus == "adequate" ~ "stain and tissue",
+           
+           stain_quality == "suboptimal" & tissue_quality == "adequate" & focus == "adequate" ~ "stain",
+           
+           stain_quality == "adequate" & tissue_quality == "adequate" & focus == "suboptimal" ~ "focus",
+           
+           stain_quality == "adequate" & tissue_quality == "suboptimal" & focus == "adequate" ~ "tissue",
+           
+           stain_quality == "adequate" & tissue_quality == "suboptimal" & focus == "suboptimal" ~ "tissue and focus"
+         ))
+
+#Save as rds 
+saveRDS(wsi_quality_origin, paste0(wsiAssessment_dir, "wsi_quality_origin.rds"))
+
+
+#summarize all columns
+
+WSI_assess_summary <- NULL
+
+char_columns <- c("biopsy_type", "stain_quality", "tissue_quality", "focus", "lab", "quality_issue")
+
+for (col in char_columns){
+  
+  summary_temp <- wsi_quality_origin %>%
+    group_by(value = .data[[col]]) %>%
+    summarise(
+      feature = col,
+      count = n(),
+      percentage = n() / nrow(WSI_assess_parsed) *100
+    ) %>%
+    arrange(desc(count)) %>%
+    select(feature, value, count, percentage)
+  
+  WSI_assess_summary<- rbind(WSI_assess_summary, summary_temp)
+}
+
+saveRDS(WSI_assess_summary, paste0(wsiAssessment_dir, "wsi_assessment_summary.rds"))
+
+#Plot lab origin, biopsy type and quality data for WSIs in test set (Supplemental Fig 3)
+WSI_assess_summary <- readRDS(paste0(wsiAssessment_dir, "wsi_assessment_summary.rds"))
+
+
+#Plot lab
+WSI_origin <- WSI_assess_summary %>% filter(feature %in% c( "lab")) 
+
+WSI_origin$value <- factor(as.numeric(WSI_origin$value, levels = sort(unique(WSI_origin$value))))
+
+plot_lab <- ggplot(WSI_origin, aes(x = feature, y = percentage, fill = factor(value))) +
+  geom_bar(stat = "identity") +
+  labs(x = "",
+       y = "Percentage") +
+  theme_bw() +
+  theme(legend.position = "right", 
+        legend.box = "horizontal",  # Display legend items vertically
+        legend.direction = "vertical",  # Adjust the direction of legend items
+        legend.key.height = unit(0.1, "in"),  # Adjust the height of the legend key
+        legend.key.width = unit(0.1, "in"),  # Adjust the width of the legend key
+        legend.spacing.y = unit(0.05, "in"),  # Adjust the vertical spacing 
+        legend.title = element_text(size = 9, family = "Arial"),
+        axis.text.x = element_blank(),  # Remove x-axis text labels
+        axis.ticks.x = element_blank(),  # Remove x-axis ticks
+        axis.text = element_text(size = 9, family = "Arial"),
+        axis.title = element_text(size = 9, family = "Arial"),
+        strip.text = element_text(size = 9, family = "Arial")) + 
+  scale_fill_brewer(palette = "Paired", name = "Laboratories")
+
+print(plot_lab)
+
+# Save the plots as a tif files
+output_file_tif_lab <- paste0(mainFigures_dir,"F3a_lab.tif")
+tiff(output_file_tif_lab, width = 2.33, height = 2.33, units = "in", res = 300)
+print(plot_lab)
+dev.off()
+
+
+#Plot biopsy type columns
+WSI_type <- WSI_assess_summary %>% filter(feature %in% c( "biopsy_type")) 
+
+type_palette <- c("full_thickness" = "lightblue", "pinch" = "pink")
+
+plot_type <- ggplot(WSI_type, aes(x = feature, y = percentage, fill = value)) +
+  geom_bar(stat = "identity") +
+  labs(x = "",
+       y = "Percentage") +
+  theme_bw() +
+  theme(legend.position = "right", 
+        legend.box = "horizontal",  # Display legend items vertically
+        legend.direction = "vertical",  # Adjust the direction of legend items
+        legend.key.height = unit(0.1, "in"),  # Adjust the height of the legend key
+        legend.key.width = unit(0.1, "in"),  # Adjust the width of the legend key
+        legend.spacing.y = unit(0.05, "in"),  # Adjust the vertical spacing 
+        axis.text.x = element_blank(),  # Remove x-axis text labels
+        axis.ticks.x = element_blank(),  # Remove x-axis ticks
+        axis.text = element_text(size = 9, family = "Arial"),
+        axis.title = element_text(size = 9, family = "Arial"),
+        strip.text = element_text(size = 9, family = "Arial"),
+        legend.title = element_text(size = 9, family = "Arial")) + 
+  scale_fill_manual(values = type_palette, name = "Biopsy type", labels = c("full_thickness" = "Full thickness", "pinch" = "Pinch"))
+
+print(plot_type)
+
+
+# Save the plots as a tif files
+output_file_tif_type <- paste0(mainFigures_dir,"F3b_type.tif")
+tiff(output_file_tif_type, width = 2.33, height = 2.33, units = "in", res = 300)
+print(plot_type)
+dev.off()
+
+#Plot quality 
+
+desired_order <- c("none", "stain", "focus", "tissue", "stain and focus", "stain and tissue", "tissue and focus", "stain, tissue and focus")
+
+#Filter quality columns
+WSI_quality <- WSI_assess_summary %>% filter(feature %in% c( "quality_issue")) 
+
+WSI_quality$value <- factor(WSI_quality$value, levels = desired_order)
+
+
+plot_quality <- ggplot(WSI_quality, aes(x = feature, y = percentage, fill = factor(value))) +
+  geom_bar(stat = "identity") +
+  labs(x = "",
+       y = "Percentage") +
+  theme_bw() +
+  theme(legend.position = "right", 
+        legend.box = "horizontal",  # Display legend items vertically
+        legend.direction = "vertical",  # Adjust the direction of legend items
+        legend.key.height = unit(0.1, "in"),  # Adjust the height of the legend key
+        legend.key.width = unit(0.1, "in"),  # Adjust the width of the legend key
+        legend.spacing.y = unit(0.05, "in"),  # Adjust the vertical spacing 
+        axis.text.x = element_blank(),  # Remove x-axis text labels
+        axis.ticks.x = element_blank(),  # Remove x-axis ticks
+        axis.text = element_text(size = 9, family = "Arial"),
+        axis.title = element_text(size = 9, family = "Arial"),
+        strip.text = element_text(size = 9, family = "Arial"),
+        legend.title = element_text(size = 9, family = "Arial")) + 
+  scale_fill_manual(values = quality_palette, name = "Quality", labels = quality_labels)
+
+print(plot_quality)
+
+# Save the plots as a tif files
+output_file_tif_quality <- paste0(mainFigures_dir,"F3c_quality.tif")
+tiff(output_file_tif_quality, width = 2.33, height = 2.33, units = "in", res = 300)
+print(plot_quality)
+dev.off()
+
+
+```
+
+
+
+
+
+
+
+
+  
+
+
+
+
