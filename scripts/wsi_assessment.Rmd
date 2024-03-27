@@ -13,7 +13,8 @@ knitr::opts_chunk$set(echo = TRUE)
 Summarize manual assessment of WSIs 
 
 ## Input
-"WSI_Assessment" - excel spreadsheet manual assessments of quality variables of all slides in test set 
+- "WSI quality" - excel spreadsheet manual assessments of quality variables of all slides in test set </input/wsi_assessments/wsi_quality.xlsx>
+- "WSI lab" - excel spreadsheet with lab origin </input/wsi_assessments/wsi_lab.xlsx>
 
 ##  Output
 - "wsi quality origin" Data frame with quality variables, and submitting laboratory data <output/wsiAssessment/wsi_quality_origin.rds>
@@ -40,8 +41,8 @@ top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/AIFeBx_supplemental
 currentDate <- format(Sys.Date(), format = "%Y-%m-%d")
 
 #Input directories 
-inputDir_WSIassess <- paste0(top_dir, batch, "/input/wsi_assessments/WSI_assessment.xlsx")
-inputDir_WSIorigin <- paste0(top_dir, batch, "/input/wsi_assessments/WSI_origin.xlsx")
+inputDir_WSIassess <- paste0(top_dir, batch, "/input/wsi_assessments/wsi_quality.xlsx")
+inputDir_WSIorigin <- paste0(top_dir, batch, "/input/wsi_assessments/wsi_lab.xlsx")
 
 #Output directory 
 wsiAssessment_dir <- paste0(top_dir, batch, "/output/wsiAssessment/")
@@ -85,13 +86,11 @@ WSI_assess_parsed <- WSI_assess_raw %>%
          focus = ifelse(blurry, "suboptimal", "adequate"),
          ) %>%
   rename(slideName = slide_name) %>%
-  select(slideName, biopsy_type, stain_quality, tissue_quality, focus, comment)
+  select(slideName, biopsy_type, stain_quality, tissue_quality, focus)
 
 #parse wsi origin
 WSI_origin_parsed <- WSI_origin_raw %>%
-  filter(!is.na(SlideName), Exclusion == "NA", Use == "Test") %>%
-  rename(slideName = SlideName,
-         lab = Lab) %>%
+  filter(!is.na(slideName), exclusion == "NA", pool == "test") %>%
   select(slideName, lab)
 
 #Join lab origin data with assessment data
