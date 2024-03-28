@@ -61,7 +61,7 @@ library(grid) #to add legends to images
 
 ### Set batch name and directories
 ```{r set batch name and directories}
-batch <- "test_set_AIFeBx_paper"
+batch <- "test_analysis"
 
 top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwMacBook
 #top_dir <- "C:/Users/jmwulcan/Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwDell
