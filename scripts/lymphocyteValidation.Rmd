@@ -81,7 +81,7 @@ inputDir_unequivocallyFalse <- paste0(top_dir,batch,"/input/unequivocally_falseP
 outputDir_all <-  paste0(top_dir,batch,"/output/lymphocyteValidation/all/")
 outputDir_bySlide <- paste0(top_dir,batch, "/output/lymphocyteValidation/bySlide/")
 rawAnnotations_dir <- paste0(outputDir_bySlide,"rawAnnotations/")
-annotationsSfCoords_dir <- paste0(outputDir_bySlide,"sfAnnotations/coordinates/")
+annotationsSfCoords_dir <- paste0(outputDir_bySlide,"parsedAnnotations/coordinates/")
 boundingBoxCoords_dir <- paste0(outputDir_bySlide,"bbAnnotations/coordinates/")
 boundingBoxPlots_dir <- paste0(outputDir_bySlide,"bbAnnotations/plots/")
 rawRois_dir <- paste0(outputDir_bySlide, "rawRois/")
@@ -93,7 +93,7 @@ validMucosaRoiCoords_dir <- paste0(outputDir_bySlide,"validMucosa_roi/coordinate
 predictionsCoords_dir <-  paste0(outputDir_bySlide,"predictions/coordinates/")
 predictionsPlots_dir <- paste0(outputDir_bySlide,"predictions/plots/")
 
-annotationsDistCoords_dir <-paste0(outputDir_bySlide,"annotationsDistCoord/") 
+annotationsDistCoords_dir <-paste0(outputDir_bySlide,"distanceBetween/") 
 distanceWithin_dir <- paste0(outputDir_bySlide,"distanceWithin/")
 
 annotationsAgree_dir <- paste0(outputDir_bySlide,"candidateLc/")
@@ -554,7 +554,47 @@ for (name in slideNames){
 ```{r AI predictions}
 slideNames <- readRDS(paste0(top_dir,batch,"/output/lymphocyteValidation/all/slideNames.rds"))
 
-# read in lcMucosa and define intersection with rois
+
+# read in mucosa prediction and define intersection with rois
+
+for (name in slideNames){
+  
+  matching_files_validMucosa <- list()
+  matching_files_rois <- list
+  
+  #Only proceed if outputfile absent
+  
+  if(!any(sapply(list.files(validMucosaRoiCoords_dir), function(file_name) grepl(name, file_name)))){
+    
+  
+    #Generate  coordinate file (overlapping lcMucosa with coordinates) if not already present
+    
+    matching_files_validMucosa <- list.files(path = inputDir_validMucosa, pattern = paste0("^", name))
+    
+    matching_files_rois <- list.files(path = roiAiforia_dir, pattern = paste0("^", name))
+    
+    validMucosaPath <- NULL
+    validMucosa<- NULL
+    roiPath <- NULL
+    roi <- NULL
+    validMucosaRoiCoords <- NULL
+    
+    
+    if(length(matching_files_validMucosa) > 0 && length(matching_files_rois) > 0 ) {
+      
+      validMucosaPath <- file.path(inputDir_validMucosa,matching_files_validMucosa[1])
+      validMucosa <- readRDS(validMucosaPath)
+      roiPath <- file.path(roiAiforia_dir,matching_files_rois[1])
+      roi <- readRDS(roiPath)
+      
+      validMucosaRoiCoords <- st_intersection(validMucosa, roi)
+      saveRDS(validMucosaRoiCoords, paste0(validMucosaRoiCoords_dir,name,"_validMucosaRoi_",currentDate,".rds"))
+    }
+  }
+}
+
+
+# read in lcMucosa and lcSeg and define intersection with rois
 
 for (name in slideNames){
   
@@ -622,43 +662,6 @@ for (name in slideNames){
   }
 }
 
-# read in mucosa prediction and define intersection with rois
-
-for (name in slideNames){
-  
-  matching_files_validMucosa <- list()
-  matching_files_rois <- list
-  
-  #Only proceed if outputfile absent
-  
-  if(!any(sapply(list.files(validMucosaRoiCoords_dir), function(file_name) grepl(name, file_name)))){
-    
-  
-    #Generate  coordinate file (overlapping lcMucosa with coordinates) if not already present
-    
-    matching_files_validMucosa <- list.files(path = inputDir_validMucosa, pattern = paste0("^", name))
-    
-    matching_files_rois <- list.files(path = roiAiforia_dir, pattern = paste0("^", name))
-    
-    validMucosaPath <- NULL
-    validMucosa<- NULL
-    roiPath <- NULL
-    roi <- NULL
-    validMucosaRoiCoords <- NULL
-    
-    
-    if(length(matching_files_validMucosa) > 0 && length(matching_files_rois) > 0 ) {
-      
-      validMucosaPath <- file.path(inputDir_validMucosa,matching_files_validMucosa[1])
-      validMucosa <- readRDS(validMucosaPath)
-      roiPath <- file.path(roiAiforia_dir,matching_files_rois[1])
-      roi <- readRDS(roiPath)
-      
-      validMucosaRoiCoords <- st_intersection(validMucosa, roi)
-      saveRDS(validMucosaRoiCoords, paste0(validMucosaRoiCoords_dir,name,"_validMucosaRoi_",currentDate,".rds"))
-    }
-  }
-}
 
 #Generate predictions - generate sf frame with AI prediction and plot
 
