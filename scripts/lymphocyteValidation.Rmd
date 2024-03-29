@@ -34,6 +34,8 @@ against reference standard comprised of "majority decision" from multiple annota
 
 - Density based clustering (later used to cluster individual pathologist annotations into candidate lymphocytes) requires an input distance threshold used to define clusters. This is challenging for our data since there is an expected overlap between the centers of annotations targeting different lymphocytes, and centers of annotations targeting the same lymphocyte. Maybe the overlap would have been smaller if annotators had been asked to annotate **centers** of lymphocytes with a small annotation tool, as opposed to **circles around** lymphocytes with a 7um2 tool (as used in this study). For this study no distance threshold is expected to perfectly sort "different lymphocytes" from "same lymphocytes" but the script below attends to identify an optimal threshold by analyzing the difference between "distance to closest annotation" when a pathologist annotation is compared to other pathologists annotation (expected to include both "same" and "other" lymphocytes, and the "distance to closest annotation" when compared only to their own annotations ("Expected to only include "other" lynmphocytes.) 
 
+- The candidate lymphocyte plots are very large in tiff format (for paper). Changed to png, but saved the ones used for paper figures under figures/supplementary and figures/main. To reproduce tiff files, delete figures to reproduce from output, block code for generating pngs and unblock code for generating tiffs
+
 ```{r load libraries, message = F}
 #General data science packages
 library(tidyverse)
@@ -61,8 +63,11 @@ library(grid) #to add legends to images
 
 ### Set batch name and directories
 ```{r set batch name and directories}
+#batch <- "Test_Scripts"
 batch <- "test_analysis"
 
+
+#top_dir <- "~/Documents/"
 top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwMacBook
 #top_dir <- "C:/Users/jmwulcan/Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwDell
 #top_dir <- "C:/Users/15303/Box/Projects/paper/AIFeBx_supplemental/" #JMW lenovo
@@ -111,7 +116,7 @@ tables_dir <- paste0(top_dir,batch,"/tables//")
 
 ### Function to flip y coordinates for graphs (see issue above)
 
-#Prints are flipped vertical compared to original. This is due to image coordinates 0,0 being top left and and graphs starting bottom left. Can be fixed with a flipYcoord function, either in graoh (alternative 1) or by changning the geometry (alternative 2) by multiply y coordinates with -1:
+#Prints are flipped vertical compared to original. This is due to image coordinates 0,0 being top left and and graphs starting bottom left. Can be fixed with a flipYcoord function, either in graph (alternative 1) or by changing the geometry (alternative 2) by multiply y coordinates with -1:
 
 #Alternative 1 
 flipYcoord <- function(geom) {
@@ -1335,9 +1340,14 @@ for (threshold in thresholds){
             legend.title = element_text(size = 27, family = "Arial")) # Adjust legend title size)+
           
         
-        # Save the plot as a tif file
-        tiff_file_path <- file.path(subfolder_plots, paste0(name,"_plot@threshold_", threshold_name, "_",currentDate, ".tif"))
-        tiff(tiff_file_path, width= 30, height = 14, units = "in", res=300) #resize to width 5 after
+        # Save the plot as a tif file - format for paper takes up too much space to run for all
+        #tiff_file_path <- file.path(subfolder_plots, paste0(name,"_plot_th_", threshold_name, "_",currentDate, ".tif"))
+        #tiff(tiff_file_path, width= 30, height = 14, units = "in", res=300) #resize to width 5 after
+        #print(combined_plot)
+        #dev.off()
+        
+        png_file_path <- file.path(subfolder_plots, paste0(name, "_plot_th_", threshold_name, "_", currentDate, ".png"))
+        png(png_file_path, width = 30, height = 14, units = "in", res = 300) # resize to width 5 after
         print(combined_plot)
         dev.off()
       }
