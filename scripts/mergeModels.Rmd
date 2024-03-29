@@ -10,31 +10,44 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ## Objective
-Generate coordinates for intraepithelial and lamina propria lymphocytes, with info on 
-tissue fragment 
-Merge the output coordinates of
-  - An object detection model for lymphocyte identification
-  - A semantic segmentation model for mucosal tissue compartment identification
+Merge model output from lymphocyte detection model and mucosal compartment segmentation model
 
-## Folder tree
+### Folder tree
 The script "folderTree" generates a folder tree that is used in this script. 
 
-## Input Data
-The lymphocyte detection model (lc_1_5000_v11) and the mucosal tissue compartment 
-model (tissue9_3000_v24) were developed in Aiforia Create, and the output coordinates
-received as custom geojsons (one per model per WSI) in um unit. Download them and move them to the respective input file after creating the folder tree.
+### Warning
+This script takes a long time to run
+Each chunk is written to only run if the (key) output file is absent.
+To bypass chunks, download the output files from bioImageArchive to the right location.
 
-## Output data
-A vectore "slideNames" with the names of all slides in the project
-A series of geojson files with coordinates for:
-- rawMucosa (The same files as read in from Aiforia, but in rds format, comes with a folder of PNG plots)
-- filteredMucosa
-- tissue outline
-- tissue fragments
-- rawLymphocytes (nuclear outlines)
-- lymphocytes centers
-- lymphocyte centers with tissue compartment and tissue fragment info
+### Input
+- Mucosa coords from aiforia (geojson in um) </input/mucosa_coords_aiforia/> 
+- Lymphocyte coords from aiforia (geojson in um) </input/lymphocyte_coords_aiforia/> 
 
+### Output (used in other scripts)
+- Slide names - vector </output/mergeModels/all/slideNames.rds>
+- Valid mucosa coordinates (mucosa coordinates updated with fragment info) </output/mergeModels/by_slide/validMucosa/coordinates/>
+- Lymphocyte mucosa coordinates <output/mergeModels/by_slide/lcMucosa/coordinates/> 
+- Lymphocyte nuclear segmentation coordinates <output/mergeModels/by_slide/lcSeg/coordinates/> 
+- Density summary statistics per slide <output/mergeModels/all/slideSummary.rds>
+
+### Intermediate output
+- Raw mucosa coordinates <output/mergeModels/by_slide/rawMucosa/coordinates/> 
+- Raw mucosa plots </output/mergeModels/by_slide/rawMucosa/plots/>
+- Filtered mucosa coords </output/mergeModels/by_slide/filteredMucosa/coordinates/>
+- Filtered mucosa plots </output/mergeModels/by_slide/filteredMucosa/plots/>
+- Outline coordinates </output/mergeModels/by_slide/outlines/coordinates/>
+- Outline plots <output/mergeModels/by_slide/outlines/plots/>
+- Fragment coordinates (coordinates for the fragment polygons) </output/mergeModels/by_slide/fragments/coordinates/>
+- Fragment metadata </output/mergeModels/by_slide/fragments/metadata/>
+- Fragment order </output/mergeModels/by_slide/fragments/order/>
+- Raw lymphocyte coordinates <output/mergeModels/by_slide/rawLc/coordinates/> 
+- Raw lymphocyte plots </output/mergeModels/by_slide/rawLc/plots/>
+- Lymphocyte point coordinates  <output/mergeModels/by_slide/lcPoint/coordinates/> 
+- Fragment density metadata <output/mergeModels/by_slide/fragmentDensity/metadata/> 
+- Fragment density coordinates (same as lymphocyte mucosa coordinates with added metadata) <output/mergeModels/by_slide/fragmentDensity/coordinates/> 
+- Fragment density plots <output/mergeModels/by_slide/fragmentDensity/plots/> 
+- Fragment density metadata for all slides <output/mergeModels/all/slideDensity.rds>
 
 ## Issues
 - For sf package area operations does not run with the read crs. 
@@ -43,7 +56,6 @@ Solution: st_set_crs 0 while reading in original.
 - Prints are flipped vertical compared to original. This is due to image coordinates 0,0 being top left and and graphs starting bottom left. This only affects plots, the output coordinates still projects right when viewed in QuPath. To generate correct plots, use fix function below.
 
 - The coordinates for these files are in um. They need to be in pixels to project right on QuPath.
-
 
 ## Deviations
 - **Renamed 9.60E+05 manually to 96e4** The slide_name 96e4 was autocorrected to scientific notation (9.60E+05) in excel prior to scanning. The slide_name 9.60E+05 is inconsistently captured in this script (repeated printing to file_name and re-reading)
@@ -61,12 +73,14 @@ options(scipen = 999) #turn of scientific notation
 library(patchwork) # used to generate composite plots in fragmentDensity chunk
 ```
 
-
 ### Set batch name and directories
 ```{r set batch name and directories}
-batch <- "test_analysis"
+batch <- "Test_Scripts"
+#batch <- "test_analysis"
 
-top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwMacBook
+
+top_dir <- "~/Documents/"
+#top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwMacBook
 #top_dir <- "C:/Users/jmwulcan/Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwDell
 #top_dir <- "C:/Users/15303/Box/Projects/paper/AIFeBx_supplemental/" #JMW lenovo
 
@@ -138,8 +152,14 @@ flipYcoord_geometry <- function(geom) {
 
 ```
 
-###Read raw mucosa files (quick)
+###Read raw mucosa files (slow)
 This chunk reads in the raw mucosa files from Aiforia, saves them unaltered as .rds files, and plots the raw mucosa per slide
+#### Input
+- Mucosa coords from aiforia (geojson in um) </input/mucosa_coords_aiforia/> 
+#### Output
+- Slide names - vector </output/mergeModels/all/slideNames.rds>
+- Raw mucosa coordinates <output/mergeModels/by_slide/rawMucosa/coordinates/> 
+- Raw mucosa plots </output/mergeModels/by_slide/rawMucosa/plots/>
 ```{r}
 # Generate a vector of file_paths in the input mucosa folder 
 
@@ -216,10 +236,15 @@ for (name in slideNames){
 }
 ```
 
-### Filter mucosa (quick) 
+### Filter mucosa (slow) 
 This chunk filters out mucosal regions not used in the merge (lumen) and saves remaining regions
 (epithelium and lamina propria) as rds files with accompaning plots.
-
+####Input
+- Slide names - vector </output/mergeModels/all/slideNames.rds>
+- Raw mucosa coordinates <output/mergeModels/by_slide/rawMucosa/coordinates/> 
+####Output
+- Filtered mucosa coords </output/mergeModels/by_slide/filteredMucosa/coordinates/>
+- Filtered mucosa plots </output/mergeModels/by_slide/filteredMucosa/plots/>
 #### Deviations: 
 - There are 4 invalid geometries in 6mj7 rawMucosa files - filtered out for now (two are lumen two are very small epithelium)
 ```{r filter mucosa}
@@ -247,8 +272,10 @@ for (name in slideNames){
       saveRDS(filteredMucosaCoords, paste0(filteredMucosaCoords_dir,name,filteredMucosa_basename,currentDate,".rds"))
     }
   }
+}
   
-  #Filtered mucosa plots (plot if plot absent and input file present)
+#Filtered mucosa plots (plot if plot absent and input file present)
+for (name in slideNames){
   
   matching_files_filteredMucosaCoords <- list()
   if(!any(sapply(list.files(filteredMucosaPlots_dir), function(file_name) grepl(name, file_name)))){
@@ -270,19 +297,16 @@ for (name in slideNames){
 }
 ```
 
-### Define tissue fragments (very slow)
-This chunk generates separate tissue fragments, through clustering mucosal components close to each other. It is computationally heavy to run. In addition to generate output coordinates for tissue fragments, and plots, it generates coordinates and plots for an intermediate step (outlines), coordinates for mucosa belonging to valid fragments (over a certain size) and some metadata for the fragments and an rds with fragment order (large to small) for each slide.
+###Outlines (slow)
+Merges lamina propria and epithelial polygons to get tissue outlines
+####Input
+- Slide names - vector </output/mergeModels/all/slideNames.rds>
+- Filtered mucosa coords </output/mergeModels/by_slide/filteredMucosa/coordinates/>
+####Output
+- Outline coordinates </output/mergeModels/by_slide/outlines/coordinates/>
+- Outline plots <output/mergeModels/by_slide/outlines/plots/>
 
-#### Issues
-Time consuming and imperfect (merges tissue fragments that are overlapping)
-
-```{r define tissue fragments}
-
-#Set buffer width around outlines
-width = 100
-
-#Set threshold for valid fragment
-minArea_um2 <- 3000
+```{r define tissue outlines}
 
 slideNames <- readRDS(paste0(top_dir,batch,"/output/mergeModels/all/slideNames.rds"))
 
@@ -307,8 +331,10 @@ for (name in slideNames){
       saveRDS(outlineCoords, paste0(outlineCoords_dir,name,outline_basename,currentDate,".rds"))
     }
   }
-  
-  #Outline plots - generate if output plot absent and inout file present
+}
+
+#Outline plots - generate if output plot absent and inout file present
+for (name in slideNames){
   
   matching_files_outlineCoords <- list()
   
@@ -329,13 +355,36 @@ for (name in slideNames){
       dev.off()
     }
   }
-  
-  #Fragment coordinates, validMucosa coordinates, fragmentMetadata and fragmentOrder - (generate if output file absent and input files present)
-  
+}
+```
+
+### Define tissue fragments (extremely slow)
+This chunk generates separate tissue fragments, through clustering mucosal components close to each other. It is computationally heavy to run. In addition to generate output coordinates for tissue fragments, and plots, it generates coordinates and plots for an intermediate step (outlines), coordinates for mucosa belonging to valid fragments (over a certain size) and some metadata for the fragments and an rds with fragment order (large to small) for each slide.
+#### Input
+- Slide names - vector </output/mergeModels/all/slideNames.rds>
+- Filtered mucosa coords </output/mergeModels/by_slide/filteredMucosa/coordinates/>
+- Outline coordinates </output/mergeModels/by_slide/outlines/coordinates/>
+#### Output
+- Fragment coordinates (coordinates for the fragment polygons) </output/mergeModels/by_slide/fragments/coordinates/>
+- Fragment metadata </output/mergeModels/by_slide/fragments/metadata/>
+- Fragment order </output/mergeModels/by_slide/fragments/order/>
+- Valid mucosa coordinates (mucosa coordinates updated with fragment info) </output/mergeModels/by_slide/validMucosa/coordinates/>
+#### Bypass
+- To bypass chunk (recommended), download validMucosa coordinates from bioimage archive (also fragmentCoords, fragmentOrder, fragment metaData) from bioimage archive (the chunk won't run if you have the fragment coordinates in place, but unless you also download the fragment metadata, fragment order and valid mucosa coordinates, these won't be generated and the rest of the script won't run)
+```{r}
+#Set buffer width around outlines
+width = 100
+
+#Set threshold for valid fragment
+minArea_um2 <- 3000
+
+#Fragment coordinates, validMucosa coordinates, fragmentMetadata and fragmentOrder - (generate if output file absent and input files present)
+for (name in slideNames){
+
   matching_files_outlineCoords <- list()
   matching_files_filteredMucosaCoords <- list()
   
-  if (!any(sapply(list.files(fragmentCoords_dir), function(file_name) grepl(name, file_name)))) {
+  if (!any(sapply(list.files(validMucosaCoords_dir), function(file_name) grepl(name, file_name)))) {
     
     matching_files_outlineCoords <- list.files(path = outlineCoords_dir, pattern = paste0("^", name))
     
@@ -370,10 +419,7 @@ for (name in slideNames){
       filteredMucosaCoords <- readRDS(filteredMucosaCoords_path)
     }
     
-    
-    
-    # if there is both a matching outlines file and a matching filtered mucosa file, merge fragment with mucosa, generate metadata and order 
-    
+    # if there is both a matching outlines file and a matching filtered mucosa file, merge fragment with mucosa, generate metadata and order
     fragmentMucosaCoords <- NULL
     fragmentMetadata <- NULL
     fragmentOrder <- NULL
@@ -418,8 +464,13 @@ for (name in slideNames){
       saveRDS(validFragmentCoords, paste0(fragmentCoords_dir,name,fragments_basename,currentDate,".rds"))
     }
   }
+}
+
+
+# Fragment plots (generate if absent and input files present)
+
+for (name in slideNames){
   
-  # Fragment plots (generate if absent and input files present)
   
    matching_files_outlineCoords <- list()
    matching_file_fragmentCoords <- list()
@@ -480,8 +531,14 @@ for (name in slideNames){
 
 ```
 
-###Read raw lymphocyte files (quick)
+###Read raw lymphocyte files
 This chunk reads in the raw lymphocyte files from Aiforia, saves them unaltered as .rds files (with plots)
+####Input
+- Slide names - vector </output/mergeModels/all/slideNames.rds>
+- Lymphocyte coords from aiforia (geojson in um) </input/lymphocyte_coords_aiforia/> 
+####Output
+- Raw lymphocyte coordinates <output/mergeModels/by_slide/rawLc/coordinates/> 
+- Raw lymphocyte plots </output/mergeModels/by_slide/rawLc/plots/>
 ```{r}
 slideNames <- readRDS(paste0(top_dir,batch,"/output/mergeModels/all/slideNames.rds"))
 
@@ -518,9 +575,10 @@ for (name in slideNames){
        }
      }
    }
-  
-  #RawLc plots (plot of absent and rawLc_coords present)
-   
+}
+
+#RawLc plots (plot of absent and rawLc_coords present)
+for (name in slideNames){
    matching_files_rawLcCoords <- list()
    
    if(!any(sapply(list.files(rawLcPlots_dir), function(file_name) grepl(name, file_name)))){
@@ -548,9 +606,13 @@ for (name in slideNames){
 ```
 
 
-### Transform lymphocyte nuclei polygons to lymphocyte centroid point coordinates (slow)
+### Transform lymphocyte nuclei polygons to lymphocyte centroid point coordinates ()
 This chunk reads in raw Lymphocyte files and transform them to point coordinates for lymphocyte nuclei (saved by slide in lcPoint folder). In addition some columns are renamed, in preparation for merging with mucosal model output.
-
+####Input
+- Slide names - vector </output/mergeModels/all/slideNames.rds>
+- Raw lymphocyte coordinates <output/mergeModels/by_slide/rawLc/coordinates/> 
+#### Output
+- Lymphocyte point coordinates  <output/mergeModels/by_slide/lcPoint/coordinates/> 
 ```{r lcPoints}
 
 slideNames <- readRDS(paste0(top_dir,batch,"/output/mergeModels/all/slideNames.rds"))
@@ -584,8 +646,13 @@ for (name in slideNames){
 }
 ```
 
-### Merge lymphocyte (centroid) coordinates with mucosal coordinates (slow)
-This chunks saves the lymphocytes that overlap with valid mucosa fragments
+### Merge lymphocyte (centroid) coordinates with mucosal coordinates ()
+####Input
+- Slide names - vector </output/mergeModels/all/slideNames.rds>
+- Valid mucosa coordinates (mucosa coordinates updated with fragment info) </output/mergeModels/by_slide/validMucosa/coordinates/>
+- Lymphocyte point coordinates  <output/mergeModels/by_slide/lcPoint/coordinates/> 
+#### Output
+- Lymphocyte mucosa coordinates <output/mergeModels/by_slide/lcMucosa/coordinates/> 
 ```{r lcMucosa}
 slideNames <- readRDS(paste0(top_dir,batch,"/output/mergeModels/all/slideNames.rds"))
 
@@ -626,8 +693,73 @@ for (name in slideNames){
 }
 ```
 
-### Calculate fragment density (quick)
-This chunk uses the output coordinates for validMucosa and fragment order ("define tissue fragment" chunk) and lcMucosa ("lcMucosa" chunk), joins the metadata for mucosa and lymphocytes and calculates density per fragment (density_metadata). The metadata are joined back ith the lcMucosa coordinates and saved as fragmentDensity coordinates. Plots per fragment are also generated (with maps of where on the slide they are). In additon tables with density per fragment for all slides, and summary stats per slide (averaged over fragments that are larger then 0.2 mm2) are generated.
+
+### Generate lymphocyte segmentation coordinates (quick)
+This chunk merges the raw Lc geometries (contains segmentation coordinates) with the lcMucosa point coordinates (contains all relevant metadata)
+#### Input
+- Slide names - vector </output/mergeModels/all/slideNames.rds>
+- Raw lymphocyte coordinates <output/mergeModels/by_slide/rawLc/coordinates/> 
+- Lymphocyte mucosa coordinates <output/mergeModels/by_slide/lcMucosa/coordinates/> 
+#### Output
+- Lymphocyte nuclear segmentation coordinates <output/mergeModels/by_slide/lcSeg/coordinates/> 
+
+```{r lcSeg}
+
+slideNames <- readRDS(paste0(top_dir,batch,"/output/mergeModels/all/slideNames.rds"))
+
+for (name in slideNames){
+  
+  matching_files_rawLcCoords <- list()
+  matching_files_lcMucosaCoords <- list()
+  
+  if(!any(sapply(list.files(lcSeg_dir), function(file_name) grepl(name, file_name)))){
+    
+    matching_files_rawLcCoords <- list.files(path = rawLcCoords_dir, pattern = paste0("^", name))
+    matching_files_lcMucosa<- list.files(path = lcMucosaCoords_dir, pattern = paste0("^", name))
+    
+    rawLcCoords_path <- character(0)
+    rawLcCoords <- NULL
+    lcMucosaPath<- character(0)
+    lcMucosaCoords <- NULL
+    rawLc_renamed <- NULL
+    lcSegCoords <- NULL
+     
+    if (length(matching_files_rawLcCoords) > 0 && length(matching_files_lcMucosa) > 0 ) {
+      
+      rawLcCoords_path <- file.path(rawLcCoords_dir, matching_files_rawLcCoords[1])
+      rawLcCoords <- readRDS(rawLcCoords_path)
+      lcMucosaPath<- file.path(lcMucosaCoords_dir, matching_files_lcMucosa[1])
+      lcMucosaCoords <- readRDS(lcMucosaPath) %>%
+        st_drop_geometry()
+      
+      #rename rawLc variables to match lcMucosa variables
+      rawLc_renamed <- rawLcCoords %>%
+        rename_at(vars(class_label:slide_name), function(x) paste0('lc_',x))
+    
+      #merge lcMucosa with rawLc coords
+      lcSegCoords <- merge(lcMucosaCoords, rawLc_renamed, by = intersect(names(lcMucosaCoords), names(rawLc_renamed)), all.x = TRUE)
+      
+      lcSegCoords <- st_as_sf(lcSegCoords)
+      
+      saveRDS(lcSegCoords, paste0(lcSeg_dir, name, "_lcSegCoords_", currentDate,".rds"))
+
+      
+    }
+  }
+}
+```
+
+### Calculate fragment density
+Joins metadata for mucosa and lymphocytes and calculates density per fragment (density_metadata). The metadata are joined back to the lcMucosa coordinates and saved as fragmentDensity coordinates. Plots per fragment are also generated (with maps of where on the slide they are). In additon tables with density per fragment for all slides, and summary stats per slide (averaged over fragments that are larger then 0.2 mm2) are generated.
+#### Input
+- Slide names - vector </output/mergeModels/all/slideNames.rds>
+- Valid mucosa coordinates (mucosa coordinates updated with fragment info) </output/mergeModels/by_slide/validMucosa/coordinates/>
+- Lymphocyte mucosa coordinates <output/mergeModels/by_slide/lcMucosa/coordinates/> 
+- Fragment order </output/mergeModels/by_slide/fragments/order/>
+#### Output
+- Fragment density metadata <output/mergeModels/by_slide/fragmentDensity/metadata/> 
+- Fragment density coordinates (same as lymphocyte mucosa coordinates with added metadata) <output/mergeModels/by_slide/fragmentDensity/coordinates/> 
+- Fragment density plots <output/mergeModels/by_slide/fragmentDensity/plots/> 
 ```{r fragment density}
 slideNames <- readRDS(paste0(top_dir,batch,"/output/mergeModels/all/slideNames.rds"))
 
@@ -712,7 +844,9 @@ for (name in slideNames){
         
         select(mucosa_fragment_name, mucosa_area_um2, epithelium_area_um2, lamina_propria_area_um2, epithelium_lc_n, lamina_propria_lc_n, epithelium_lcDensity_um2, epithelium_lcDensity_1000um2, epithelium_lcDensity_10000um2, epithelium_lcDensity_mm2, lamina_propria_lcDensity_um2, lamina_propria_lcDensity_1000um2, lamina_propria_lcDensity_10000um2, lamina_propria_lcDensity_mm2) %>%
         arrange(factor(mucosa_fragment_name, levels = fragmentOrder))
+      
       saveRDS(density_metadata, paste0(fragmentDensity_metadata_dir,name,fragmentDensity_basename,currentDate,".rds"))
+      
       #generate fragment density by grouping lcMucosa and merging with metadata
       lcMucosa_byFragment <- lcMucosaCoords %>%
         group_by(mucosa_fragment_name, mucosa_fragment_area_um2, mucosa_fragment_name2) %>%
@@ -723,19 +857,17 @@ for (name in slideNames){
        saveRDS(fragmentDensityCoords, paste0(fragmentDensityCoords_dir,name,fragmentDensity_basename,currentDate,".rds"))
     }
    }
+}
    
-   #Fragment density plots - generates plots for each fragment if plot folder doesn't exist, fragmentDensity_metadata, validMucosa and lcMucosa exists
-   
+#Fragment density plots - generates plots for each fragment if plot folder doesn't exist, fragmentDensity_metadata, validMucosa and lcMucosa exists
+
+for (name in slideNames){ 
    
    plotPath <- paste0(fragmentDensity_plots_dir, name, "/")
    
    matching_files_validMucosa <- list()
    matching_files_lcMucosa <- list()
    matching_files_densityMetadata <- list()
-   
-   
-   
-   
    
    if (!file.exists(plotPath)){
      
@@ -811,7 +943,22 @@ for (name in slideNames){
       }
       
    }
-   
+}
+```
+
+
+### Summary stats
+Calculate summary statistics for lymphocyte densities per fragment all slides
+#### Input
+- Slide names - vector </output/mergeModels/all/slideNames.rds>
+- Fragment density metadata (per slide) <output/mergeModels/by_slide/fragmentDensity/metadata/> 
+#### Output
+- Fragment density metadata for all slides <output/mergeModels/all/slideDensity.rds>
+- Density summary statistics per slide <output/mergeModels/all/slideSummary.rds>
+```{r}
+slideNames <- readRDS(paste0(top_dir,batch,"/output/mergeModels/all/slideNames.rds"))
+
+for (name in slideNames){
    #slideDensity generate all slide all fragment table with densities
    
    matching_files_densityMetadata <- list.files(path = fragmentDensity_metadata_dir, pattern = paste0("^", name))
@@ -828,7 +975,7 @@ for (name in slideNames){
       mutate(slide_name = name) %>% 
       select(slide_name, mucosa_fragment_name:lamina_propria_lcDensity_mm2)
     slideDensityMetadata <- bind_rows(slideDensityMetadata, densityMetadata)
-    saveRDS(slideDensityMetadata, paste0(slideDensityMetadata_dir,slideDensity_basename,currentDate,".rds"))
+    saveRDS(slideDensityMetadata, paste0(slideDensityMetadata_dir,"slideDensity.rds"))
     
     
     #slideSummaries
@@ -888,55 +1035,8 @@ for (name in slideNames){
         lamina_propria_lcDensity_1000um2_upper_quantile = quantile(lamina_propria_lcDensity_1000um2, 0.75, na.rm = TRUE),
         lamina_propria_lcDensity_1000um2_iqr = lamina_propria_lcDensity_1000um2_upper_quantile - lamina_propria_lcDensity_1000um2_lower_quantile)
     
-    saveRDS(slideSummary, paste0(slideSummaryMetadata_dir,slideSummary_basename,currentDate,".rds"))
+    saveRDS(slideSummary, paste0(slideSummaryMetadata_dir,"slideSummary.rds"))
   }
 }
 ```
 
-### Generate lymphocyte segmentation coordinates (quick)
-This chunk merges the raw Lc geometries (contains segmentation coordinates) with the lcMucosa point coordinates (contains all relevant metadata)
-```{r lcSeg}
-
-slideNames <- readRDS(paste0(top_dir,batch,"/output/mergeModels/all/slideNames.rds"))
-
-for (name in slideNames){
-  
-  matching_files_rawLcCoords <- list()
-  matching_files_lcMucosaCoords <- list()
-  
-  if(!any(sapply(list.files(lcSeg_dir), function(file_name) grepl(name, file_name)))){
-    
-    matching_files_rawLcCoords <- list.files(path = rawLcCoords_dir, pattern = paste0("^", name))
-    matching_files_lcMucosa<- list.files(path = lcMucosaCoords_dir, pattern = paste0("^", name))
-    
-    rawLcCoords_path <- character(0)
-    rawLcCoords <- NULL
-    lcMucosaPath<- character(0)
-    lcMucosaCoords <- NULL
-    rawLc_renamed <- NULL
-    lcSegCoords <- NULL
-     
-    if (length(matching_files_rawLcCoords) > 0 && length(matching_files_lcMucosa) > 0 ) {
-      
-      rawLcCoords_path <- file.path(rawLcCoords_dir, matching_files_rawLcCoords[1])
-      rawLcCoords <- readRDS(rawLcCoords_path)
-      lcMucosaPath<- file.path(lcMucosaCoords_dir, matching_files_lcMucosa[1])
-      lcMucosaCoords <- readRDS(lcMucosaPath) %>%
-        st_drop_geometry()
-      
-      #rename rawLc variables to match lcMucosa variables
-      rawLc_renamed <- rawLcCoords %>%
-        rename_at(vars(class_label:slide_name), function(x) paste0('lc_',x))
-    
-      #merge lcMucosa with rawLc coords
-      lcSegCoords <- merge(lcMucosaCoords, rawLc_renamed, by = intersect(names(lcMucosaCoords), names(rawLc_renamed)), all.x = TRUE)
-      
-      lcSegCoords <- st_as_sf(lcSegCoords)
-      
-      saveRDS(lcSegCoords, paste0(lcSeg_dir, name, "_lcSegCoords_", currentDate,".rds"))
-
-      
-    }
-  }
-}
-```

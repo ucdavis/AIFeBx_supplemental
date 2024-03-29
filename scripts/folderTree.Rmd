@@ -15,53 +15,46 @@ Generate a folder tree for the "Artificial intelligence-based quantificication o
 ### Set batch name and directories
 ```{r set batch name and directories}
 batch <- "test_analysis"
+#batch <- "Test_Scripts"
 
-top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwMacBook
+#top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwMacBook
 #top_dir <- "C:/Users/jmwulcan/Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwDell
 #top_dir <- "C:/Users/15303/Box/Projects/paper/AIFeBx_supplemental/" #JMW lenovo
 
+top_dir <- "~/Documents/"
 ```
 
 ```{r}
 #Define folder structure:
 
-folders <- c("input", 
+folders <- c(
              "input/lymphocyte_coords_aiforia", 
              "input/mucosa_coords_aiforia",
              "input/pathologist_annotations",
              "input/humanSemiQuant_grades",
              "input/name_image",
+             "input/unequivocally_falsePredictions",
+             "input/wsi_assessments",
              "output", 
-             "figures",
              "figures/supplementary/",
              "figures/main/",
              "tables",
              "output/mergeModels/all", 
-             "output/mergeModels/by_slide", 
-             "output/mergeModels/by_slide/rawMucosa", 
              "output/mergeModels/by_slide/rawMucosa/coordinates",
              "output/mergeModels/by_slide/rawMucosa/plots", 
-             "output/mergeModels/by_slide/filteredMucosa",
              "output/mergeModels/by_slide/filteredMucosa/coordinates",
              "output/mergeModels/by_slide/filteredMucosa/plots",
-             "output/mergeModels/by_slide/outlines", 
              "output/mergeModels/by_slide/outlines/coordinates",
              "output/mergeModels/by_slide/outlines/plots",
-             "output/mergeModels/by_slide/fragments",
              "output/mergeModels/by_slide/fragments/coordinates", 
              "output/mergeModels/by_slide/fragments/plots", 
              "output/mergeModels/by_slide/fragments/metadata",
              "output/mergeModels/by_slide/fragments/order",
-             "output/mergeModels/by_slide/validMucosa",
              "output/mergeModels/by_slide/validMucosa/coordinates", 
-             "output/mergeModels//by_slide/rawLc",
              "output/mergeModels/by_slide/rawLc/coordinates", 
              "output/mergeModels/by_slide/rawLc/plots",
-             "output/mergeModels/by_slide/lcPoint", 
              "output/mergeModels/by_slide/lcPoint/coordinates",
-             "output/mergeModels/by_slide/lcMucosa", 
              "output/mergeModels/by_slide/lcMucosa/coordinates",
-             "output/mergeModels/by_slide/fragmentDensity", 
              "output/mergeModels/by_slide/fragmentDensity/coordinates",
              "output/mergeModels/by_slide/fragmentDensity/metadata", 
              "output/mergeModels/by_slide/fragmentDensity/plots",
@@ -69,7 +62,6 @@ folders <- c("input",
              "output/randomRois/",
              "output/wsiAssessment/",
              "output/lymphocyteValidation/all",
-             "output/lymphocyteValidation/bySlide",
              "output/lymphocyteValidation/bySlide/rawAnnotations",
              "output/lymphocyteValidation/bySlide/parsedAnnotations/coordinates",
              "output/lymphocyteValidation/bySlide/bbAnnotations/coordinates",
