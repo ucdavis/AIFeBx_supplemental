@@ -297,7 +297,7 @@ for (name in slideNames){
 }
 ```
 
-###Outlines (slow)
+###Outlines (very slow)
 Merges lamina propria and epithelial polygons to get tissue outlines
 ####Input
 - Slide names - vector </output/mergeModels/all/slideNames.rds>
