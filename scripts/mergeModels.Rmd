@@ -18,7 +18,8 @@ The script "folderTree" generates a folder tree that is used in this script.
 ### Warning
 This script takes a long time to run
 Each chunk is written to only run if the (key) output file is absent.
-To bypass chunks, download the output files from bioImageArchive to the right location.
+The chunks "outline", "fragments" and "lcMucosa" are extremely slow.
+To bypass chunks, download the output files for the chunk (listed above each chunk) from bioImageArchive to the right location.
 
 ### Input
 - Mucosa coords from aiforia (geojson in um) </input/mucosa_coords_aiforia/> 
@@ -152,7 +153,7 @@ flipYcoord_geometry <- function(geom) {
 
 ```
 
-###Read raw mucosa files (slow)
+###rawMucosa
 This chunk reads in the raw mucosa files from Aiforia, saves them unaltered as .rds files, and plots the raw mucosa per slide
 #### Input
 - Mucosa coords from aiforia (geojson in um) </input/mucosa_coords_aiforia/> 
@@ -160,7 +161,7 @@ This chunk reads in the raw mucosa files from Aiforia, saves them unaltered as .
 - Slide names - vector </output/mergeModels/all/slideNames.rds>
 - Raw mucosa coordinates <output/mergeModels/by_slide/rawMucosa/coordinates/> 
 - Raw mucosa plots </output/mergeModels/by_slide/rawMucosa/plots/>
-```{r}
+```{r rawMucosa}
 # Generate a vector of file_paths in the input mucosa folder 
 
 #generate a list of file_paths for geojson files in the directory
@@ -306,7 +307,7 @@ Merges lamina propria and epithelial polygons to get tissue outlines
 - Outline coordinates </output/mergeModels/by_slide/outlines/coordinates/>
 - Outline plots <output/mergeModels/by_slide/outlines/plots/>
 
-```{r define tissue outlines}
+```{r outlines}
 
 slideNames <- readRDS(paste0(top_dir,batch,"/output/mergeModels/all/slideNames.rds"))
 
@@ -358,7 +359,7 @@ for (name in slideNames){
 }
 ```
 
-### Define tissue fragments (extremely slow)
+### Fragments (extremely slow)
 This chunk generates separate tissue fragments, through clustering mucosal components close to each other. It is computationally heavy to run. In addition to generate output coordinates for tissue fragments, and plots, it generates coordinates and plots for an intermediate step (outlines), coordinates for mucosa belonging to valid fragments (over a certain size) and some metadata for the fragments and an rds with fragment order (large to small) for each slide.
 #### Input
 - Slide names - vector </output/mergeModels/all/slideNames.rds>
@@ -371,7 +372,7 @@ This chunk generates separate tissue fragments, through clustering mucosal compo
 - Valid mucosa coordinates (mucosa coordinates updated with fragment info) </output/mergeModels/by_slide/validMucosa/coordinates/>
 #### Bypass
 - To bypass chunk (recommended), download validMucosa coordinates from bioimage archive (also fragmentCoords, fragmentOrder, fragment metaData) from bioimage archive (the chunk won't run if you have the fragment coordinates in place, but unless you also download the fragment metadata, fragment order and valid mucosa coordinates, these won't be generated and the rest of the script won't run)
-```{r}
+```{r fragments}
 #Set buffer width around outlines
 width = 100
 
@@ -531,7 +532,7 @@ for (name in slideNames){
 
 ```
 
-###Read raw lymphocyte files
+###Raw lymphocytes
 This chunk reads in the raw lymphocyte files from Aiforia, saves them unaltered as .rds files (with plots)
 ####Input
 - Slide names - vector </output/mergeModels/all/slideNames.rds>
@@ -539,7 +540,7 @@ This chunk reads in the raw lymphocyte files from Aiforia, saves them unaltered 
 ####Output
 - Raw lymphocyte coordinates <output/mergeModels/by_slide/rawLc/coordinates/> 
 - Raw lymphocyte plots </output/mergeModels/by_slide/rawLc/plots/>
-```{r}
+```{r rawLc}
 slideNames <- readRDS(paste0(top_dir,batch,"/output/mergeModels/all/slideNames.rds"))
 
 #generate a list of file_paths for geojson files in the directory
@@ -606,7 +607,8 @@ for (name in slideNames){
 ```
 
 
-### Transform lymphocyte nuclei polygons to lymphocyte centroid point coordinates ()
+### LcPoints
+Transform lymphocyte nuclei polygons to lymphocyte centroid point coordinates ()
 This chunk reads in raw Lymphocyte files and transform them to point coordinates for lymphocyte nuclei (saved by slide in lcPoint folder). In addition some columns are renamed, in preparation for merging with mucosal model output.
 ####Input
 - Slide names - vector </output/mergeModels/all/slideNames.rds>
@@ -646,7 +648,8 @@ for (name in slideNames){
 }
 ```
 
-### Merge lymphocyte (centroid) coordinates with mucosal coordinates ()
+### LcMucosa (very slow)
+Merge lymphocyte (centroid) coordinates with mucosal coordinates
 ####Input
 - Slide names - vector </output/mergeModels/all/slideNames.rds>
 - Valid mucosa coordinates (mucosa coordinates updated with fragment info) </output/mergeModels/by_slide/validMucosa/coordinates/>

@@ -31,9 +31,12 @@ library(writexl)
 
 ### Set batch name and directories
 ```{r set batch name and directories}
-batch <- "test_analysis"
 
-top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwMacBook
+batch <- "Test_Scripts"
+top_dir <- "~/Documents/"
+
+
+#top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwMacBook
 #top_dir <- "C:/Users/jmwulcan/Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwDell
 #top_dir <- "C:/Users/15303/Box/Projects/paper/AIFeBx_supplemental/" #JMW lenovo
 
@@ -54,8 +57,7 @@ quality_palette = c("none" = "#1B9E77",
                    "tissue" = "#BC4399", 
                    "stain and focus" = "#A66753",  
                    "stain and tissue" =  "#96A713" , 
-                   "stain and tissue" = "#D59D08", 
-                   "tissue and focus" =   "#9D7426", 
+                   "tissue and focus" =   "#D59D08", 
                    "stain, tissue and focus" =  "#666666")
 
 
@@ -64,7 +66,6 @@ quality_labels = c("none" = "Adequate quality",
                    "focus" = "Out of focus", 
                    "tissue" = "Crushed tissue", 
                    "stain and focus" = "Faded stain &\nout of focus", 
-                   "stain and tissue" = "Faded stain &\ncrushed tissue", 
                    "stain and tissue" = "Faded stain &\ncrushed tissue", 
                    "tissue and focus" = "Crushed tissue &\nout of focus", 
                    "stain, tissue and focus" = "Faded stain &\ncrushed tissue &\nout of focus")

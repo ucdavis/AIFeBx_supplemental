@@ -63,12 +63,12 @@ library(grid) #to add legends to images
 
 ### Set batch name and directories
 ```{r set batch name and directories}
-#batch <- "Test_Scripts"
-batch <- "test_analysis"
+batch <- "Test_Scripts"
+#batch <- "test_analysis"
 
 
-#top_dir <- "~/Documents/"
-top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwMacBook
+top_dir <- "~/Documents/"
+#top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwMacBook
 #top_dir <- "C:/Users/jmwulcan/Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwDell
 #top_dir <- "C:/Users/15303/Box/Projects/paper/AIFeBx_supplemental/" #JMW lenovo
 
@@ -278,8 +278,7 @@ quality_palette = c("none" = "#1B9E77",
                    "tissue" = "#BC4399", 
                    "stain and focus" = "#A66753",  
                    "stain and tissue" =  "#96A713" , 
-                   "stain and tissue" = "#D59D08", 
-                   "tissue and focus" =   "#9D7426", 
+                   "tissue and focus" =   "#D59D08", 
                    "stain, tissue and focus" =  "#666666")
 
 
@@ -288,7 +287,6 @@ quality_labels = c("none" = "Adequate quality",
                    "focus" = "Out of focus", 
                    "tissue" = "Crushed tissue", 
                    "stain and focus" = "Faded stain &\nout of focus", 
-                   "stain and tissue" = "Faded stain &\ncrushed tissue", 
                    "stain and tissue" = "Faded stain &\ncrushed tissue", 
                    "tissue and focus" = "Crushed tissue &\nout of focus", 
                    "stain, tissue and focus" = "Faded stain &\ncrushed tissue &\nout of focus")
@@ -386,6 +384,8 @@ if (nrow(missing_combinations) == 0) {
 annotations_bySlide <- split(annotations, f = annotations$slideName)
 
 #Save raw annotations by slide name (if it doesn't already exist)
+rawAnnotations <- NULL
+
 for (name in slideNames){
   if(!any(sapply(list.files(rawAnnotations_dir), function(file_name) grepl(name, file_name)))){
     rawAnnotations <- annotations_bySlide[[name]]
@@ -395,12 +395,18 @@ for (name in slideNames){
 
 #The annotation coordinates from aiforia are in pixels, but the ai-output coordinates are in um. The conversion factor can vary by slide. convert annotations to um and sf object
 
+
 conversion_factors <- list()
 
 for (name in slideNames){
+  
+  matching_files_rawAnnotations <- NULL
+  
   if(!any(sapply(list.files(annotationsSfCoords_dir), function(file_name) grepl(name, file_name)))){
     
     matching_files_rawAnnotations <-  list.files(path = rawAnnotations_dir, pattern = paste0("^", name))
+    
+    
     
     if(length(matching_files_rawAnnotations) > 0){
       rawAnnotations <- readRDS(file.path(rawAnnotations_dir, matching_files_rawAnnotations[1]))
@@ -446,17 +452,21 @@ for (name in slideNames){
       
       saveRDS(annotations_sf, paste0(annotationsSfCoords_dir,name, "_annotationsSfCoords_",currentDate,".rds"))
       
+      saveRDS(conversion_factors, paste0(outputDir_all,"conversionFactors.rds"))
       
     }
     
     
   }
+  
 }
 
-saveRDS(conversion_factors, paste0(outputDir_all,"conversionFactors.rds"))
+
 
 #Generate a frame with all annotations
 annotations_sf_all <- NULL
+matching_files_annotationsSfCoords <- NULL
+
 for (name in slideNames){ 
   #read in sf_annotations by slide
   matching_files_annotationsSfCoords <- list.files(path = annotationsSfCoords_dir, pattern = paste0("^", name))
@@ -468,12 +478,12 @@ for (name in slideNames){
     annotationsSfCoordsPath <- file.path(annotationsSfCoords_dir, matching_files_annotationsSfCoords[1])
     annotationsSfCoords <- readRDS(annotationsSfCoordsPath)
     annotations_sf_all <- rbind(annotations_sf_all, annotationsSfCoords)
-    
+    saveRDS(annotations_sf_all, paste0(outputDir_all,"annotations_sf_all.rds"))
     }
 }
 
 
-saveRDS(annotations_sf_all, paste0(outputDir_all,"annotations_sf_all.rds"))
+
 ```
 
 ### Read rois (quick)
@@ -488,7 +498,9 @@ saveRDS(annotations_sf_all, paste0(outputDir_all,"annotations_sf_all.rds"))
 
 ```{r read rois}
 layers <- fromJSON(inputDir_valCoords)
+
 slideNames <- readRDS(paste0(top_dir,batch,"/output/lymphocyteValidation/all/slideNames.rds"))
+
 conversion_factor <- readRDS(paste0(outputDir_all,"conversionFactors.rds"))
 
 rois <- layers$layers$regions[[1]]
@@ -500,6 +512,8 @@ rois <- rois %>%
 
 rois_bySlide <- split(rois, f = rois$slideName)
 
+rawRoi <- NULL
+
 for (name in slideNames){
   if(!any(sapply(list.files(rawRois_dir), function(file_name) grepl(name, file_name)))){
     rawRoi <- rois_bySlide[[name]]
@@ -507,11 +521,19 @@ for (name in slideNames){
   }
 }
 
+matching_files_rawRois <- NULL
+
 for (name in slideNames){
   if(!any(sapply(list.files(roiAiforia_dir), function(file_name) grepl(name, file_name)))){
     
      
     matching_files_rawRois <-  list.files(path = rawRois_dir, pattern = paste0("^", name))
+    
+    rawRoi <- NULL
+    conversion_factor <- NULL
+    coordinates <- NULL
+    roi_sf_points <- NULL
+    roi_sf <- NULL
     
     if(length(matching_files_rawRois) > 0){
       rawRoi <- readRDS(file.path(rawRois_dir, matching_files_rawRois[1]))
@@ -720,6 +742,7 @@ saveRDS(predictionAll, paste0(outputDir_all,"predictionsAll.rds"))
 
 for (name in slideNames){
   
+  predictionsCoords <- NULL
   
   if(!any(sapply(list.files(predictionsCoords_dir), function(file_name) grepl(name, file_name)))){
     
@@ -3513,7 +3536,7 @@ plot <- ggplot(ueFP_lc, aes(x = "", fill = factor(quality_issue))) +
   geom_bar(positon = "fill") +
   labs(x = "Unequivocally false positives\nlymphocyte model issues", y = "Percentage") +
   scale_fill_manual(values = quality_palette, name = "Quality", labels = quality_labels) +
-  scale_y_continuous(labels = scales::percent_format(scale = 100)) +
+  #scale_y_continuous(labels = scales::percent_format(scale = 100)) +
   theme_bw() +
   theme(legend.position = "right", 
         legend.box = "horizontal",  # Display legend items vertically

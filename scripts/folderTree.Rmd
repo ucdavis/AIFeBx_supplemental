@@ -14,8 +14,8 @@ Generate a folder tree for the "Artificial intelligence-based quantificication o
 
 ### Set batch name and directories
 ```{r set batch name and directories}
-batch <- "test_analysis"
-#batch <- "Test_Scripts"
+#batch <- "test_analysis"
+batch <- "Test_Scripts"
 
 #top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwMacBook
 #top_dir <- "C:/Users/jmwulcan/Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwDell
@@ -67,6 +67,7 @@ folders <- c(
              "output/lymphocyteValidation/bySlide/bbAnnotations/coordinates",
              "output/lymphocyteValidation/bySlide/bbAnnotations/plots",
              "output/lymphocyteValidation/bySlide/roisAiforia",
+             "output/lymphocyteValidation/bySlide/rawRois",
              "output/lymphocyteValidation/bySlide/lcMucosa_roi/coordinates/",
              "output/lymphocyteValidation/bySlide/lcSeg_roi/coordinates/",
              "output/lymphocyteValidation/bySlide/validMucosa_roi/coordinates/",
