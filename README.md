@@ -1,5 +1,4 @@
-# Supplemental data for "Artificial intelligence-based quantification of
-lymphocytes in feline small intestinal biopsies" 
+# Supplemental data for "Artificial intelligence-based quantification of lymphocytes in feline small intestinal biopsies"  
 (for submission as full manuscript to Veterinary Pathology)
 
 ## Objective
