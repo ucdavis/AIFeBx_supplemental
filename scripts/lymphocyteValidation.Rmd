@@ -21,8 +21,6 @@ against reference standard comprised of "majority decision" from multiple annota
 - "validMucosa" - coordinates for mucosa outlines (output from mergeModels)
 - "slideNames" (output from mergeModels)
 
-##Output
-
 
 ##Deviations
 - **Removed "mock_annotations"** Initial test annotations (by me and SK) are included in the pathologist_annotations files and needed to be filtered out.
@@ -56,19 +54,13 @@ library(readxl)
 #Plot packages
 library(ggbeeswarm)
 library(reshape2)
-library(ggridges)
 library(RColorBrewer)
-library(grid) #to add legends to images
 ```
 
 ### Set batch name and directories
 ```{r set batch name and directories}
-batch <- "Test_Scripts"
-#batch <- "test_analysis"
-
-
-top_dir <- "~/Documents/"
-#top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwMacBook
+batch <- "test_analysis"
+top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwMacBook
 #top_dir <- "C:/Users/jmwulcan/Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwDell
 #top_dir <- "C:/Users/15303/Box/Projects/paper/AIFeBx_supplemental/" #JMW lenovo
 
@@ -269,7 +261,7 @@ class_contributors_labels_2 <- c("Intraepithelial n=0" = "0",
 issue_color_scale <- c("lymphocyte_model" =  "#8C510A", "mucosal_model" =    "#D8B365" , "both_lymphocyte_and_mucosal_model" = "#F6E8C3", "roi_border" = "#C7EAE5", "clustering" = "#5AB4AC" , "off_target_annotation" = 
    "#01665E")
 
-issueLabel <- c( "off_target_annotation" = "Off target", "clustering" = "Clustering", "roi_border" = "Border", "mucosal_model" = "Mucosal model", "lymphocyte_model" = "Lymphocyte model" )
+issueLabel <- c( "off_target_annotation" = "Colocalization (technical)", "clustering" = "Reference aggregation (technical)", "roi_border" = "Validation region border (technical)", "mucosal_model" = "Mucosal compartment model", "lymphocyte_model" = "Cell detection model" )
 
 
 quality_palette = c("none" = "#1B9E77", 
@@ -921,6 +913,9 @@ Generate candidate lymphocytes through density based clustering (dbScan) using a
 - Candidate lymphocyte center coordinates by threshold <output/lymphocyteValidation/bySlide/candidateLc/<threshold>/coordinates">
 - Candidate lymphocytes bounding boxes by threshold <output/lymphocyteValidation/bySlide/candidateLc/<threshold>/buffers"> 
 - Plots of candidate lymphocytes (bounding boxes), and overlaid individual pathologist annotations (centers) and AI muucosa and lymphocyte outline predictions by slide <output/lymphocyteValidation/bySlide/candidateLc/<threshold>/plots"
+
+#### Deviation
+Did not set seed first time I ran this. Dbscan have random element. Got the same results rerunning though.
 
 ```{r generate candidate lymphocytes}
 
@@ -1766,7 +1761,7 @@ stack_bar_candidate <- ggplot(candidateLc_byClass_and_nPath, aes(x = classLabel,
                     labels = class_contributors_labels) +
   labs(
        x = "",
-       y = "Candidate lymphocytes %",
+       y = "Lymphocytes %",
        fill = "Class and contributors") + 
   
   theme_bw() +
@@ -1786,7 +1781,7 @@ print(stack_bar_candidate)
 
 # Save the plot as a tif file
 output_file_tif <- paste0(mainFigures_dir,"F5_candidateLc.tif")
-tiff(output_file_tif, width = 7, height = 2.33, units = "in", res = 300)
+tiff(output_file_tif, width = 7, height = 1.75, units = "in", res = 300)
 print(stack_bar_candidate)
 dev.off()
 
@@ -1802,7 +1797,7 @@ reference_of_candidate_table <- candidateLc_byClass_and_nPath %>%
     percent_annotations_majority = sum(n_annotations[n_contributing_pathologists >= 6]) / sum(n_annotations) * 100
   )
 
-write_xlsx(reference_of_candidate_table, paste0(tables_dir, "reference_of_candidate_table.xslx"))
+write_xlsx(reference_of_candidate_table, paste0(tables_dir, "reference_of_candidate_table.xlsx"))
 ```
 
 ### Summary statistics for lymphocytes by source (quick)
@@ -1815,7 +1810,7 @@ Calculate summary statistics (median and interquartile range) for lymphocytes by
 - Lymphocyte predictions that overlap with rois with unique Ids and confidence (all slides) <output/lymphocyteValidation/all/predictionsAll.rds> 
 
 #### Output
-- Stats table for "Lymphocytes by source" (used in **Table 1**) as excel  <tables/T1_lymphocytes_bySource.xlsx>
+- Stats table for "Lymphocytes by source" (used in **Table 1**) as excel  <tables/lymphocytes_bySource.xlsx>
 _ Summaries for individual annotations <output/lymphocyteValidation/all/individual_annotations_summaries.rds> 
 _ Summaries for candidate lymphocytes <output/lymphocyteValidation/all/candidateLc_summaries.rds> 
 _ Summaries for reference lymphocytes <output/lymphocyteValidation/all/referenceLc_summaries.rds> 
@@ -2185,9 +2180,9 @@ lymphocytes_bySource <- rbind(lymphocytes_bySource, predictionAI_annotations)
 
 
 #Save as rds
-saveRDS(lymphocytes_bySource, paste0(outputDir_all,"T1_lymphocytes_bySource.rds"))
+saveRDS(lymphocytes_bySource, paste0(outputDir_all,"lymphocytes_bySource.rds"))
 #and excel
-write_xlsx(lymphocytes_bySource, paste0(tables_dir, "T1_lymphocytes_bySource.xlsx"))
+write_xlsx(lymphocytes_bySource, paste0(tables_dir, "lymphocytes_bySource.xlsx"))
 ```
 
 ### Histograms for lymphocytes per ROI (quick)
@@ -2295,7 +2290,7 @@ print(plot)
 
 # Save the plot as a tif file
 output_file_tif <- paste0(mainFigures_dir,"F6_pathologistRank.tif")
-tiff(output_file_tif, width = 7, height = 4.66, units = "in", res = 300)
+tiff(output_file_tif, width = 7, height = 3.5, units = "in", res = 300)
 print(plot)
 dev.off()
 ```
@@ -3259,7 +3254,7 @@ unequivocallyFalse$issue <- factor(unequivocallyFalse$issue, levels = desired_or
 
 plot <- ggplot(unequivocallyFalse, aes(x = "", fill = issue)) +
   geom_bar(position = "fill") +  # Use position = "fill" to display percentages
-  labs(x = "Unequivocal mispredictions", y = "Percentage") +  # Change y-axis label to "Percentage"
+  labs(x = "Unequivocal FP & FN", y = "Percentage") +  # Change y-axis label to "Percentage"
   scale_fill_manual(values = issue_color_scale, name = "Error source", labels = issueLabel) +
   scale_y_continuous(labels = scales::percent_format(scale = 100)) +  # Convert y-axis labels to percentages
   theme_bw() +
@@ -3303,7 +3298,7 @@ write_xlsx(ueF_lc_summary,paste0(tables_dir, "unequivocallyFalse_lymphocytesumma
 
 plot <- ggplot(ueF_lc, aes(x = "", fill = factor(confusion_term))) +
   geom_bar(position = "fill") +
-  labs(x = "Unequivocally false \nwith lymphocyte model issue", y = "Percentage") +
+  labs(x = "Unequivocally false \nwith cell detection error", y = "Percentage") +
   scale_fill_brewer(palette = "Paired", name = "Category") + 
   theme_bw() +
   theme(legend.position = "right", 
@@ -3374,7 +3369,7 @@ ueFP_lc$object <- factor(ueFP_lc$object, levels = desired_order)
 
 plot <- ggplot(ueFP_lc, aes(x = "", fill = factor(object))) +
   geom_bar(position = "fill") +
-  labs(x = "Unequivocally false positive\nwith lymphocyte model issues", y = "Percentage", fill = "Object") +
+  labs(x = "Unequivocal FP\n(cell detection error)", y = "Percentage", fill = "Object") +
   scale_fill_manual(values = brewer.pal(8, "Pastel2"), labels = c("pen_mark" = "Pen mark", "lymphocyte_double" = "Double prediction", "plasma_cell" = "Plasma cell", "goblet_cell" = "Goblet cell nucleus", "epithelial_nucleus" = "Epithelial nucleus", "unknown" = "Unknown")) +
   scale_y_continuous(labels = scales::percent_format(scale = 100)) +
   theme_bw() +
@@ -3440,11 +3435,11 @@ ueF_mucosal$quality_issue <- factor(ueF_mucosal$quality_issue, levels = desired_
 
 plot <- ggplot(ueF_mucosal, aes(x = "", fill = factor(quality_issue))) +
   geom_bar(position = "fill") +
-  labs(x = "Unequivocal mispredictions\nmucosal model issues", y = "Percentage") +
+  labs(x = "Unequivocal FP & FN \n(mucosal model errors)", y = "Percentage") +
   scale_fill_manual(values = quality_palette, name = "Quality", labels = quality_labels) +
   scale_y_continuous(labels = scales::percent_format(scale = 100)) +
   theme_bw() +
-  theme(legend.position = "right", 
+  theme(legend.position = "none", 
         legend.box = "horizontal",  # Display legend items vertically
         legend.direction = "vertical",  # Adjust the direction of legend items
         legend.key.height = unit(0.1, "in"),  # Adjust the height of the legend key
@@ -3461,7 +3456,7 @@ plot <- ggplot(ueF_mucosal, aes(x = "", fill = factor(quality_issue))) +
 print(plot)
 
 output_file_tif<- paste0(supplementaryFigures_dir,"S7a_ueFmucosaQuality.tif")
-tiff(output_file_tif, width = 3.5, height = 2.33, units = "in", res = 300)
+tiff(output_file_tif, width = 1.9, height = 2.33, units = "in", res = 300)
 print(plot)
 dev.off()
 
@@ -3501,11 +3496,11 @@ ueFN_lc$quality_issue <- factor(ueFN_lc$quality_issue, levels = desired_order)
 
 plot <- ggplot(ueFN_lc, aes(x = "", fill = factor(quality_issue))) +
   geom_bar(position = "fill") +
-  labs(x = "Unequivocally false negatives\nlymphocyte model issues", y = "percentage", fill = "quality issue") +
+  labs(x = "Unequivocal FN \n(cell detection errors)", y = "Percentage", fill = "quality issue") +
  scale_fill_manual(values = quality_palette, name = "Quality", labels = quality_labels) +
   scale_y_continuous(labels = scales::percent_format(scale = 100)) +
   theme_bw() +
-  theme(legend.position = "right", 
+  theme(legend.position = "none", 
         legend.box = "horizontal",  # Display legend items vertically
         legend.direction = "vertical",  # Adjust the direction of legend items
         legend.key.height = unit(0.1, "in"),  # Adjust the height of the legend key
@@ -3520,12 +3515,15 @@ plot <- ggplot(ueFN_lc, aes(x = "", fill = factor(quality_issue))) +
 print(plot)
 
 output_file_tif<- paste0(supplementaryFigures_dir,"S7b_ueFN_lcQuality.tif")
-tiff(output_file_tif, width = 3.5, height = 2, units = "in", res = 300)
+tiff(output_file_tif, width = 1.9, height = 2.33, units = "in", res = 300)
 print(plot)
 dev.off()
 
 
-#Plot unequivocal FP with lcissues  by quality issue  
+#Explore Unequivocal FPs
+ueFP_lc <- ueF_lc %>% filter(confusion_term == "FP") 
+
+#Plot unequivocal FP with lc issues  by quality issue  
 desired_order <- c("none", "stain", "focus", "tissue", "stain and focus", "stain and tissue", "tissue and focus", "stain, tissue and focus")
 
 # Convert the "issue" variable to a factor with the desired order
@@ -3533,12 +3531,12 @@ ueFP_lc$quality_issue <- factor(ueFP_lc$quality_issue, levels = desired_order)
 
 
 plot <- ggplot(ueFP_lc, aes(x = "", fill = factor(quality_issue))) +
-  geom_bar(positon = "fill") +
-  labs(x = "Unequivocally false positives\nlymphocyte model issues", y = "Percentage") +
+  geom_bar(position = "fill") +
+  labs(x = "Unequivocal FP\n(cell detection errors)", y = "Percentage") +
   scale_fill_manual(values = quality_palette, name = "Quality", labels = quality_labels) +
-  #scale_y_continuous(labels = scales::percent_format(scale = 100)) +
+  scale_y_continuous(labels = scales::percent_format(scale = 100)) +
   theme_bw() +
-  theme(legend.position = "right", 
+  theme(legend.position = "none", 
         legend.box = "horizontal",  # Display legend items vertically
         legend.direction = "vertical",  # Adjust the direction of legend items
         legend.key.height = unit(0.1, "in"),  # Adjust the height of the legend key
@@ -3553,7 +3551,7 @@ plot <- ggplot(ueFP_lc, aes(x = "", fill = factor(quality_issue))) +
 print(plot)
 
 output_file_tif<- paste0(supplementaryFigures_dir,"S7c_ueFP_lcQuality.tif")
-tiff(output_file_tif, width = 3.5, height = 2.33, units = "in", res = 300)
+tiff(output_file_tif, width = 1.9, height = 2.33, units = "in", res = 300)
 print(plot)
 dev.off()
 ```

@@ -32,11 +32,8 @@ library(writexl)
 ### Set batch name and directories
 ```{r set batch name and directories}
 
-batch <- "Test_Scripts"
-top_dir <- "~/Documents/"
-
-
-#top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwMacBook
+batch <- "test_analysis"
+top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwMacBook
 #top_dir <- "C:/Users/jmwulcan/Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwDell
 #top_dir <- "C:/Users/15303/Box/Projects/paper/AIFeBx_supplemental/" #JMW lenovo
 

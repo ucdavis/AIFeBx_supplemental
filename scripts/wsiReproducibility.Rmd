@@ -32,6 +32,9 @@ library(RColorBrewer)
 
 #Set batch names and directories
 ```{r set batch names and directories}
+
+
+
 batch <- "test_analysis"
 
 top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwMacBook
@@ -48,6 +51,8 @@ mainFigures_dir <- paste0(top_dir,batch,"/figures/main/")
 tables_dir <- paste0(top_dir,batch,"/tables//")  
 
 classLabel_palette <- c("Intraepithelial lymphocytes" = "#FA8533","Lamina propria lymphocytes and plasma cells" =  "#3282Bd")
+
+grade_labels <- c("0" = "Normal", "1" = "Mild", "2" = "Moderate", "3" = "Marked")
 ```
 
 
@@ -146,7 +151,7 @@ Generate contigency tables, calculate agreement metrics per pathologist pair, pl
 -Agreement per pathologist pair for intraepithelial lymphocytes as rds   < output/wsiReproducibility/ie_agreementByPair.rds> and excel <tables/ie_agreementByPair.xlsx> 
 -Agreement per pathologist pair for lamina propria lymphocytes as rds and excel <tables/lp_agreementByPair.xlsx> 
 < output/wsiReproducibility/lp_agreementByPair.rds> 
--**Supplementary figure 11 a and b ** Weighted agreemenet and kappa per pathologist pair <figures/supplementary/S11a_weightedKappa_perPair.tif/>, <figures/supplementary/S11b_cohensKappa_perPair.tif/>,
+-**Supplementary figure 12 a and b ** Weighted agreemenet and kappa per pathologist pair <figures/supplementary/S12a_weightedKappa_perPair.tif/>, <figures/supplementary/S12b_cohensKappa_perPair.tif/>,
 -Average agreement across pathologist pairs intraepithelial <output/wsiReproducibility/ie_agreementAverage.rds> 
 -Average agreement across pathologist pairs lamina propria <output/wsiReproducibility/lp_agreementAverage.rds> 
 ```{r generate contingency tables}
@@ -460,7 +465,7 @@ plot <- ggplot(rounded_kappas, aes(x = path_pair, y = weighted_kappa, color = cl
 print(plot)
 
 # Save the plot as a tif file
-output_file_tif <- paste0(supplementaryFigures_dir,"S11a_weightedKappa_perPair.tif")
+output_file_tif <- paste0(supplementaryFigures_dir,"S12a_weightedKappa_perPair.tif")
 tiff(output_file_tif, width = 7, height = 3.5, units = "in", res = 300)
 print(plot)
 dev.off()
@@ -486,7 +491,7 @@ plot <- ggplot(rounded_kappas, aes(x = path_pair, y = cohens_kappa, color = clas
 print(plot)
 
 # Save the plot as a tif file
-output_file_tif <- paste0(supplementaryFigures_dir,"S11b_cohensKappa_perPair.tif")
+output_file_tif <- paste0(supplementaryFigures_dir,"S12b_cohensKappa_perPair.tif")
 tiff(output_file_tif, width = 7, height = 3.5, units = "in", res = 300)
 print(plot)
 dev.off()
@@ -556,7 +561,7 @@ Generates heatmaps of raw semiquantitativ grades
 -Parsed semiquantiative grades for intraepithelial lymphocytes <output/wsiAssessment/intraEpithelial_lymphocytes.rds>
 -Parsed semiquantiative grades for lamina propria lymphocytes and plasma cells <output/wsiAssessment/laminaPropria_lymphocytesPlasmacells.rds>
 #### Output
--**Supplemental Figure S12a-b** Heatmap of raw grades intraepithelial <figures/supplementary/S12a_rawIeGrades.tif/>, <figures/supplementary/S12b_rawLpGrades.tif/>
+-**Supplemental Figure S11a-b** Heatmap of raw grades intraepithelial <figures/supplementary/S11a_rawIeGrades.tif/>, <figures/supplementary/S11b_rawLpGrades.tif/>
 
 ```{r}
 #load data 
@@ -599,7 +604,7 @@ heatmap_grades <- pheatmap(heatmap_matrix, cluster_rows = TRUE, cluster_cols = T
 print(heatmap_grades)
 
 # Save the plot as a tif file
-output_file_tif <- paste0(supplementaryFigures_dir,"S12a_rawIeGrades.tif")
+output_file_tif <- paste0(supplementaryFigures_dir,"S11a_rawIeGrades.tif")
 tiff(output_file_tif, width = 3.5, height = 7, units = "in", res = 300)
 print(heatmap_grades)
 dev.off()
@@ -637,7 +642,7 @@ if (any(sapply(ie_lc %>% select(p01:p11), function(x) !is.numeric(x)))) {
 heatmap_grades <- pheatmap(heatmap_matrix, cluster_rows = TRUE, cluster_cols = TRUE, legend_breaks = seq(0, 3, by = 1),  fontsize = 7)
 
 # Save the plot as a tif file
-output_file_tif <- paste0(supplementaryFigures_dir,"S12b_rawlpGrades.tif")
+output_file_tif <- paste0(supplementaryFigures_dir,"S11b_rawlpGrades.tif")
 tiff(output_file_tif, width = 3.5, height = 7, units = "in", res = 300)
 print(heatmap_grades)
 dev.off()
@@ -649,8 +654,7 @@ Calculate observed weighted and unweighted agreement per slide
 ####Input
 -Parsed semiquantiative grades for intraepithelial lymphocytes <output/wsiAssessment/intraEpithelial_lymphocytes.rds>
 -Parsed semiquantiative grades for lamina propria lymphocytes and plasma cells <output/wsiAssessment/laminaPropria_lymphocytesPlasmacells.rds>
-#### Output
--**Supplemental Figure S13** Heatmap of observed agreement  <figures/supplementary/S13_agreementBySlide>
+
 
 ```{r add agreement by slide}
 #load data 
@@ -854,10 +858,6 @@ heatmap_agreement <- pheatmap(heatmap_data_agreement, cluster_rows = TRUE, clust
 
 print(heatmap_agreement)
 
-# Save the plot as a tif file
-output_file_tif <- paste0(supplementaryFigures_dir,"S13_agreementBySlide.tif")
-tiff(output_file_tif, width = 3.5, height = 8.26, units = "in", res = 300)
-print(heatmap_agreement)
-dev.off()
+
 ```
 

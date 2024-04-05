@@ -1,5 +1,5 @@
 ---
-title: "wsiAssessment"
+title: "wsiAI_vs_Path"
 author: "Wulcan"
 date: "2024-03-23"
 output: html_document
@@ -29,17 +29,16 @@ library(ggbeeswarm)
 
 ### Set batch name and directories
 ```{r set batch name and directories}
-batch <- "Test_Scripts"
-top_dir <- "~/Documents/"
-#batch <- "test_analysis"
 
-#top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwMacBook
+batch <- "test_analysis"
+
+top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwMacBook
 #top_dir <- "C:/Users/jmwulcan/Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwDell
 #top_dir <- "C:/Users/15303/Box/Projects/paper/AIFeBx_supplemental/" #JMW lenovo
 
 inputDir_sQuant <- paste0(top_dir, batch,"/output/wsiGrades_parsed/")
 
-inputDir_AIquant <- paste0(top_dir,batch,"/output/mergeModels/all/slideSummary_2024-03-06.rds")
+inputDir_AIquant <- paste0(top_dir,batch,"/output/mergeModels/all/slideSummary.rds")
 
 #Set output directory 
 outputDir_AI_vsPath <-paste0(top_dir, batch,"/output/wsiAI_vs_path/" )
@@ -108,6 +107,8 @@ plot <- ggplot(wsi_validationData, aes(x = median_grade, y = density_1000um2_med
   geom_boxplot(aes(group = median_grade), alpha = 0) +
   facet_wrap(~class_label, scales = "free_y") +
   scale_color_manual(values = classLabel_palette, name = "Class" ) +
+  scale_x_continuous(breaks = c(0, 1, 2, 3),
+                     labels = c("Normal", "Mild", "Moderate", "Marked")) +
 
  
   labs(
@@ -125,4 +126,4 @@ print(plot)
 dev.off()
 
 
-``
+```

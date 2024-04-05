@@ -24,6 +24,8 @@ Parse WSI grades
 
 ```{r load libraries}
 library(tidyverse)
+library(writexl)
+library(readxl)
 ```
 
 
@@ -207,8 +209,8 @@ names(lp_lcPc) <- gsub("_lamina_propria_lymphocytes_and_plasmacells", "", names(
 
   
 #Save rds 
-saveRDS(ie_lc, paste0(outputDir_sQuant,"WSI_grades_median_intraepithelial.rds"))
-saveRDS(lp_lcPc, paste0(outputDir_sQuant,"WSI_grades_median_laminaPropria.rds"))
+saveRDS(ie_lc, paste0(outputDir_parse,"WSI_grades_median_intraepithelial.rds"))
+saveRDS(lp_lcPc, paste0(outputDir_parse,"WSI_grades_median_laminaPropria.rds"))
 
 #Save rds 
 saveRDS(ie_lc, paste0(outputDir_parse,"intraEpithelial_lymphocytes.rds"))
