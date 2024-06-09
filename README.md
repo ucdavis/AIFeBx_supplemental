@@ -4,7 +4,7 @@ lymphocytes in feline small intestinal biopsies"
 
 ## Objective
 This repository contains scripts for data analysis and manuscript preparation.
-Raw and intermediate data files will be available via bioImageArchive.
+Raw and intermediate data files is available via bioImageArchive (S-BIAD1129) 
 
 ## Folder hierarchy
 All the scripts are adjusted to a folder hierarchy, created by the script 
@@ -19,7 +19,7 @@ The folder figure contain figures for the paper (from multiples scripts)
 The folder tables contain tabular data used in the paper (from multiple scripts)
 
 ## Data
-All input and output data will be made available via bioImage archive. 
+All input and output data is available via bioImage archive (S-BIAD1129). 
 It is recommended to download and organize the data into the intended folder tree
 structure (to avoid running computationally intense portions).
 

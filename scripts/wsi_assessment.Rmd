@@ -10,11 +10,12 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ## Objective
-Summarize manual assessment of WSIs 
+Summarize manual assessment of WSIs and case info
 
 ## Input
 - "WSI quality" - excel spreadsheet manual assessments of quality variables of all slides in test set </input/wsi_assessments/wsi_quality.xlsx>
 - "WSI lab" - excel spreadsheet with lab origin </input/wsi_assessments/wsi_lab.xlsx>
+- "WSI case info" excel spreasheet with signalment and original diagnosis
 
 ##  Output
 - "wsi quality origin" Data frame with quality variables, and submitting laboratory data <output/wsiAssessment/wsi_quality_origin.rds>
@@ -43,6 +44,7 @@ currentDate <- format(Sys.Date(), format = "%Y-%m-%d")
 #Input directories 
 inputDir_WSIassess <- paste0(top_dir, batch, "/input/wsi_assessments/wsi_quality.xlsx")
 inputDir_WSIorigin <- paste0(top_dir, batch, "/input/wsi_assessments/wsi_lab.xlsx")
+inputDir_caseInfo <- paste0(top_dir, batch, "/input/wsi_assessments/case_info.xlsx")
 
 #Output directory 
 wsiAssessment_dir <- paste0(top_dir, batch, "/output/wsiAssessment/")
@@ -248,6 +250,24 @@ output_file_tif_quality <- paste0(mainFigures_dir,"F3c_quality.tif")
 tiff(output_file_tif_quality, width = 2.33, height = 2.33, units = "in", res = 300)
 print(plot_quality)
 dev.off()
+
+
+```
+### Sumarize original diagnosis
+Summary statistics for original diagnoses for Table 1.
+```{r read case info}
+case_info <- read_xlsx(inputDir_caseInfo)
+
+
+case_info_training <- case_info %>% filter(pool == "training")
+case_info_tuning <- case_info %>% filter(pool == "tuning")
+case_info_test <- case_info %>% filter(pool == "test")
+
+dx_summary <- case_info %>%
+  group_by(pool, diagnosis_simplified) %>%
+  summarize(count = n()) %>%
+  mutate(percentage = count / sum(count) * 100) %>%
+  ungroup()
 
 
 ```

@@ -19,7 +19,7 @@ Compare AI-generated lymphocyte densities to pathologists semiquantitative grade
 - AI-derived lymphocyte quantifications </output/mergeModels/all/slideSummary_2024-03-06.rds>
 
 #### Output
-**Figure 14** AI-derived lymphocyte counts by semiquantitative grade
+**Figure 12** AI-derived lymphocyte counts by semiquantitative grade
 
 ```{r load libraries}
 library(tidyverse)
@@ -32,9 +32,9 @@ library(ggbeeswarm)
 
 batch <- "test_analysis"
 
-top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwMacBook
+#top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwMacBook
 #top_dir <- "C:/Users/jmwulcan/Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwDell
-#top_dir <- "C:/Users/15303/Box/Projects/paper/AIFeBx_supplemental/" #JMW lenovo
+top_dir <- "C:/Users/15303/Box/Projects/AI/paper/AIFeBx_supplemental/" #JMW lenovo
 
 inputDir_sQuant <- paste0(top_dir, batch,"/output/wsiGrades_parsed/")
 
@@ -112,7 +112,7 @@ plot <- ggplot(wsi_validationData, aes(x = median_grade, y = density_1000um2_med
 
  
   labs(
-       x = "Semiquantiative grade",
+       x = "Semiquantitative grade",
        y = "Lymphocytes/1000um2")+
   theme_bw() +
   theme(legend.position = "none", 
@@ -120,7 +120,7 @@ plot <- ggplot(wsi_validationData, aes(x = median_grade, y = density_1000um2_med
   
 print(plot)
 
-output_file_tif <- paste0(mainFigures_dir,"F14_compare.tif")
+output_file_tif <- paste0(mainFigures_dir,"F12_compare.tif")
 tiff(output_file_tif, width = 7, height = 3.5, units = "in", res = 300)
 print(plot)
 dev.off()

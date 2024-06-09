@@ -18,7 +18,8 @@ Calculate interobserver agreement for pathologists semiquantative grades of test
 - Vector of observers <output/wsiAssessment/observers.rds>
 
 ##Output
-- **Figure 13 a-b** Upset plots <figures/main/13a_upsetIE.tif><figures/main/13b_upsetLP.tif>
+- **Figure 11 a-b** Upset plots <figures/main/11a_upsetIE.tif><figures/main/11b_upsetLP.tif>
+- **Supplemental Figure 9a-b** Heatmap with per slide grades
 
 ```{r load libraries}
 library(tidyverse)
@@ -53,6 +54,10 @@ tables_dir <- paste0(top_dir,batch,"/tables//")
 classLabel_palette <- c("Intraepithelial lymphocytes" = "#FA8533","Lamina propria lymphocytes and plasma cells" =  "#3282Bd")
 
 grade_labels <- c("0" = "Normal", "1" = "Mild", "2" = "Moderate", "3" = "Marked")
+
+# Define color mapping for each integer value
+epithelial_grade_palette <- c("#FDE0C2", "#FDBE85", "#FA8533", "#7F2704")
+lamina_propria_grade_palette <- c("#CDE0F1", "#8BBFDC", "#3282Bd", "#08306B")
 ```
 
 
@@ -62,8 +67,8 @@ grade_labels <- c("0" = "Normal", "1" = "Mild", "2" = "Moderate", "3" = "Marked"
 -Parsed semiquantiative grades for lamina propria lymphocytes and plasma cells <output/wsiAssessment/laminaPropria_lymphocytesPlasmacells.rds>
 - Vector of observers <output/wsiAssessment/observers.rds>
 ####Output
-- **Figure 13 a-b** Upset plots
-<figures/main/13a_upsetIE.tif><figures/main/13b_upsetLP.tif>
+- **Figure 11 a-b** Upset plots
+<figures/main/11a_upsetIE.tif><figures/main/11b_upsetLP.tif>
 ```{r}
 #load data 
 ie_lc <- readRDS(paste0(inputDir,"intraEpithelial_lymphocytes.rds"))
@@ -112,8 +117,8 @@ par(family = "Arial", cex = 0.9)
 
 print(ie_upset_plot)
 
-output_file_tif <- paste0(mainFigures_dir,"F13a_upsetIE.tif")
-tiff(output_file_tif, width = 3.5, height = 3.5, units = "in", res = 300)
+output_file_tif <- paste0(mainFigures_dir,"F11a_upsetIE.tif")
+tiff(output_file_tif, width = 3.5, height = 3.34, units = "in", res = 300)
 print(ie_upset_plot)
 dev.off()
 
@@ -132,8 +137,8 @@ lp_upset_plot <- upset(upset_lp, keep.order = T, sets = c("Marked", "Moderate", 
 par(family = "Arial", cex = 0.9)
  print(lp_upset_plot)
 
-output_file_tif <- paste0(mainFigures_dir,"F13b_upsetLP.tif")
-tiff(output_file_tif, width = 3.5, height = 3.5, units = "in", res = 300)
+output_file_tif <- paste0(mainFigures_dir,"F11b_upsetLP.tif")
+tiff(output_file_tif, width = 3.54, height = 3.34, units = "in", res = 300)
 print(lp_upset_plot)
 dev.off()
 
@@ -151,9 +156,8 @@ Generate contigency tables, calculate agreement metrics per pathologist pair, pl
 -Agreement per pathologist pair for intraepithelial lymphocytes as rds   < output/wsiReproducibility/ie_agreementByPair.rds> and excel <tables/ie_agreementByPair.xlsx> 
 -Agreement per pathologist pair for lamina propria lymphocytes as rds and excel <tables/lp_agreementByPair.xlsx> 
 < output/wsiReproducibility/lp_agreementByPair.rds> 
--**Supplementary figure 12 a and b ** Weighted agreemenet and kappa per pathologist pair <figures/supplementary/S12a_weightedKappa_perPair.tif/>, <figures/supplementary/S12b_cohensKappa_perPair.tif/>,
--Average agreement across pathologist pairs intraepithelial <output/wsiReproducibility/ie_agreementAverage.rds> 
--Average agreement across pathologist pairs lamina propria <output/wsiReproducibility/lp_agreementAverage.rds> 
+-**Supplementary figure 10 a and b ** Weighted agreement and Cohen's kappa per pathologist pair <figures/supplementary/S10a_weightedKappa_perPair.tif/>, <figures/supplementary/S10b_cohensKappa_perPair.tif/>,
+
 ```{r generate contingency tables}
 
 #load data 
@@ -182,7 +186,7 @@ for (i in 1:(length(observers) - 1)) {
     ie_contingency_table <- xtabs(~ factor(ie_lc[[observer1]], levels = 0:3) + factor(ie_lc[[observer2]], levels = 0:3))
     
     #Store the contingency table in a list
-    ie_contingencyTables[[paste0(observer1,"_vs_",observer2)]] <- ie_contingency_table
+    ie_contingencyTables[[paste0(observer1," vs ",observer2)]] <- ie_contingency_table
   }
 }
 
@@ -205,7 +209,7 @@ for (i in 1:(length(observers) - 1)) {
     lp_contingency_table <- xtabs(~ factor(lp_lcPc[[observer1]], levels = 0:3) + factor(lp_lcPc[[observer2]], levels = 0:3))
     
     #Store the contingency table in a list
-    lp_contingencyTables[[paste0(observer1,"_vs_",observer2)]] <- lp_contingency_table
+    lp_contingencyTables[[paste0(observer1," vs ",observer2)]] <- lp_contingency_table
   }
 }
 
@@ -460,12 +464,12 @@ plot <- ggplot(rounded_kappas, aes(x = path_pair, y = weighted_kappa, color = cl
         axis.text = element_text(size = 11, family = "Arial"),
         axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
   facet_wrap(~ classLabel, scales = "free_y", ncol = 1) +
-  scale_fill_manual(values = classLabel_palette) 
+  scale_color_manual(values = classLabel_palette) 
   
 print(plot)
 
 # Save the plot as a tif file
-output_file_tif <- paste0(supplementaryFigures_dir,"S12a_weightedKappa_perPair.tif")
+output_file_tif <- paste0(supplementaryFigures_dir,"S10a_weightedKappa_perPair.tif")
 tiff(output_file_tif, width = 7, height = 3.5, units = "in", res = 300)
 print(plot)
 dev.off()
@@ -486,12 +490,12 @@ plot <- ggplot(rounded_kappas, aes(x = path_pair, y = cohens_kappa, color = clas
         axis.text = element_text(size = 11, family = "Arial"),
         axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
   facet_wrap(~ classLabel, scales = "free_y", ncol = 1) +
-  scale_fill_manual(values = classLabel_palette) 
+  scale_color_manual(values = classLabel_palette) 
   
 print(plot)
 
 # Save the plot as a tif file
-output_file_tif <- paste0(supplementaryFigures_dir,"S12b_cohensKappa_perPair.tif")
+output_file_tif <- paste0(supplementaryFigures_dir,"S10b_cohensKappa_perPair.tif")
 tiff(output_file_tif, width = 7, height = 3.5, units = "in", res = 300)
 print(plot)
 dev.off()
@@ -549,8 +553,8 @@ lp_WSIagree_summaryStats <- lp_summary_frame %>%
     sd_avg_weighted_kappa_MoE = sd(weighted_kappa_MoE))
 
 
-saveRDS(ie_WSIagree_summaryStats, paste0(outputDir_repro,"ie_agreementAverage.rds"))
-saveRDS(lp_summary_frame, paste0(outputDir_repro,"lp_agreementAverage.rds"))
+#saveRDS(ie_WSIagree_summaryStats, paste0(outputDir_repro,"ie_agreementAverage.rds"))
+#saveRDS(lp_summary_frame, paste0(outputDir_repro,"lp_agreementAverage.rds"))
 
 ```
 
@@ -561,303 +565,99 @@ Generates heatmaps of raw semiquantitativ grades
 -Parsed semiquantiative grades for intraepithelial lymphocytes <output/wsiAssessment/intraEpithelial_lymphocytes.rds>
 -Parsed semiquantiative grades for lamina propria lymphocytes and plasma cells <output/wsiAssessment/laminaPropria_lymphocytesPlasmacells.rds>
 #### Output
--**Supplemental Figure S11a-b** Heatmap of raw grades intraepithelial <figures/supplementary/S11a_rawIeGrades.tif/>, <figures/supplementary/S11b_rawLpGrades.tif/>
+-**Supplemental Figure S9a-b** Heatmap of raw grades intraepithelial <figures/supplementary/S9a_rawIeGrades.tif/>, <figures/supplementary/S9b_rawLpGrades.tif/>
 
 ```{r}
-#load data 
+#Read in intraepithelial scores
 ie_lc <- readRDS(paste0(inputDir,"intraEpithelial_lymphocytes.rds"))
 
-lp_lcPc <-readRDS(paste0(inputDir,"laminaPropria_lymphocytesPlasmacells.rds"))
+column_sums <- colSums(ie_lc[, -1]) 
 
-### Heatmamp of raw semiquantative grades intraepithelial
-heatmap_data <- ie_lc 
+# Order the pathologists in order of cumulative score (lowest to highest) (to order x-axis)
+pathologist_order <- data.frame(
+  variable = names(column_sums),
+  column_sum = column_sums
+)
 
+pathologist_order <- arrange(pathologist_order, column_sum)
 
-# Set row and column names
-rownames(heatmap_data) <- heatmap_data$slide_name
-
-# Remove the 'slide_name' column
-heatmap_data <- select(heatmap_data, -slide_name)
-
-heatmap_matrix <- data.matrix(heatmap_data)
-
-colnames(heatmap_data) <- colnames(ie_lc)[-1]
-
-# Check for missing or infinite values
-if (any(is.na(heatmap_matrix)) || any(!is.finite(heatmap_matrix))) {
-  stop("Data contains missing or infinite values.")
-}
-
-# Check data types
-if (any(sapply(heatmap_matrix, function(x) !is.numeric(x)))) {
-  stop("Data contains non-numeric values.")
-}
-
-# Check data types in 'p01' to 'p11'
-if (any(sapply(ie_lc %>% select(p01:p11), function(x) !is.numeric(x)))) {
-  stop("Columns 'p01' to 'p11' contain non-numeric values.")
-}
-
-# Generate the heatmap
-heatmap_grades <- pheatmap(heatmap_matrix, cluster_rows = TRUE, cluster_cols = TRUE, legend_breaks = seq(0, 3, by = 1),  fontsize = 7)
-
-print(heatmap_grades)
-
-# Save the plot as a tif file
-output_file_tif <- paste0(supplementaryFigures_dir,"S11a_rawIeGrades.tif")
-tiff(output_file_tif, width = 3.5, height = 7, units = "in", res = 300)
-print(heatmap_grades)
-dev.off()
-
-#Heatmap raw lamina propria grades
-heatmap_data <- lp_lcPc
+ordered_pathologists <- pathologist_order$variable
 
 
-# Set row and column names
-rownames(heatmap_data) <- heatmap_data$slide_name
+# Add variable with cumulative per slide score (to order y axis)
+ie_lc$sum <- rowSums(ie_lc[, -1])
 
-# Remove the 'slide_name' column
-heatmap_data <- select(heatmap_data, -slide_name)
+ie_lc <- ie_lc %>% arrange(desc(sum))
 
-heatmap_matrix <- data.matrix(heatmap_data)
+ie_lc_long <- pivot_longer(ie_lc, cols = starts_with("p"), names_to = "Pathologist", values_to = "Grade")
 
-colnames(heatmap_data) <- colnames(ie_lc)[-1]
+ie_lc_long$slide_name <- factor(ie_lc_long$slide_name, levels = unique(ie_lc$slide_name))
 
-# Check for missing or infinite values
-if (any(is.na(heatmap_matrix)) || any(!is.finite(heatmap_matrix))) {
-  stop("Data contains missing or infinite values.")
-}
 
-# Check data types
-if (any(sapply(heatmap_matrix, function(x) !is.numeric(x)))) {
-  stop("Data contains non-numeric values.")
-}
+# Plot the tile map
+plot <- ggplot(ie_lc_long, aes(x = factor(Pathologist, levels = ordered_pathologists), y = slide_name, fill = factor(Grade))) +
+  geom_tile(color = "black") +
+  scale_fill_manual(values = epithelial_grade_palette, name = "Grade", labels = c("0" = "Normal", "1" = "Mild", "2" = "Moderate", "3" = "Marked")) +
+  theme_bw() +
+  theme(legend.position = "right", 
+        axis.text = element_text(size = 5, family = "Arial"),
+        axis.title = element_text(size = 9, family = "Arial"),
+         axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  labs(x = "Pathologist", y = "Slide")
 
-# Check data types in 'p01' to 'p11'
-if (any(sapply(ie_lc %>% select(p01:p11), function(x) !is.numeric(x)))) {
-  stop("Columns 'p01' to 'p11' contain non-numeric values.")
-}
-
-# Generate the heatmap
-heatmap_grades <- pheatmap(heatmap_matrix, cluster_rows = TRUE, cluster_cols = TRUE, legend_breaks = seq(0, 3, by = 1),  fontsize = 7)
+print(plot)
 
 # Save the plot as a tif file
-output_file_tif <- paste0(supplementaryFigures_dir,"S11b_rawlpGrades.tif")
-tiff(output_file_tif, width = 3.5, height = 7, units = "in", res = 300)
-print(heatmap_grades)
+output_file_tif <- paste0(supplementaryFigures_dir,"S9a_rawIeGrades.tif")
+tiff(output_file_tif, width = 3.54, height = 6.78, units = "in", res = 300)
+print(plot)
 dev.off()
 
-```
-
-### Agreement by slide
-Calculate observed weighted and unweighted agreement per slide
-####Input
--Parsed semiquantiative grades for intraepithelial lymphocytes <output/wsiAssessment/intraEpithelial_lymphocytes.rds>
--Parsed semiquantiative grades for lamina propria lymphocytes and plasma cells <output/wsiAssessment/laminaPropria_lymphocytesPlasmacells.rds>
-
-
-```{r add agreement by slide}
+#Lamina propria
 #load data 
-ie_lc <- readRDS(paste0(inputDir,"intraEpithelial_lymphocytes.rds"))
 lp_lcPc <-readRDS(paste0(inputDir,"laminaPropria_lymphocytesPlasmacells.rds"))
-observers <- readRDS(paste0(inputDir,"observers.rds"))
 
-ie_lc <- ie_lc %>%
-  mutate(class_label = "Intraepithelial lymphocytes")
+# Order the pathologists in order of cumulative score (lowest to highest) (to order x-axis)
 
-lp_lcPc  <- lp_lcPc %>%
-  mutate(class_label = "Lamina propria lymphocytes and plasmacells")
+column_sums <- colSums(lp_lcPc[, -1]) 
 
+pathologist_order <- data.frame(
+  variable = names(column_sums),
+  column_sum = column_sums
+)
 
-WSI_agreementBySlide <- rbind(ie_lc, lp_lcPc) %>%
-  select(slide_name, class_label, p01:p11 )
+pathologist_order <- arrange(pathologist_order, column_sum)
 
-
-WSI_agreementBySlide$observed_agreement <- NA
-WSI_agreementBySlide$weighted_observed_agreement <- NA
-
-for (k in 1:nrow(WSI_agreementBySlide)){
-  
-  contingencyTables <- list()
-  observer1 <- character(0)
-  observer2 <- character(0)
-  contingency_table <- NULL
-  
-  #Generate contingency tables for each observer pair
-  for (i in 1:(length(observers) - 1)) {
-    for (j in (i +1): length(observers)) {
-      observer1 <- observers[i]
-      observer2 <- observers[j]
-      
-      #Create a contingency table for observer 1 vs. observer 2
-      
-      contingency_table <- xtabs(~ factor(WSI_agreementBySlide[[k, observer1]], levels = 0:3) + factor(WSI_agreementBySlide[[k, observer2]], levels = 0:3))
-      
-      #Store the contingency table in a list
-    
-      contingencyTables[[paste0(observer1,"_vs_",observer2)]] <- contingency_table
-    }
-  }
-  
-  #Generate vector of observer pairs 
-
-  observer_pairs <- names(contingencyTables)
-  
-  #For each pathologist pair, create a table of summary stats 
-  
-  #Intraepithelial lymphocytes
-  
-  summaryTables <- list()
-  contingency_table <- NULL
-  total_n = NULL
-  observed_agreement = NULL
-  summary_table = NULL
-  
-  for (observer_pair in observer_pairs){
-  
-    contingency_table <- contingencyTables[[observer_pair]]
-    
-    # Calculate total observations
-  
-    total_n <- sum(contingency_table)
-    
-    # Calculate observed agreement
-  
-    observed_agreement <- sum(diag(contingency_table)) / total_n
-    
-    #Create a summary table
-  
-    summary_table <- data.frame(
-    
-      total_n = total_n,
-    
-      observed_agreement = observed_agreement)
-    
-    
-    summaryTables[[observer_pair]] <- summary_table
-  }
-  
-   # Collect in one dataframe
-  pathPairs <- lapply(seq_along(summaryTables), function(i) {
-  
-    path_pair <- paste0(names(summaryTables)[i])
-    PathPair <- as.data.frame(summaryTables[[i]])
-    PathPair$path_pair <- path_pair
-    return(PathPair)
-    })
-  
-  summary_frame <- bind_rows(pathPairs)
-  
-  summary_frame <- summary_frame %>%
-  select(path_pair, everything())
-  
-  #Calculate weighted observed agreement
-  divide_by_total_n <- function(table) {
-  total_n <- sum(table)
-  return(table/total_n)
-  }
-  
-  proportion_tables = list()
-  
-  for (name in names(contingencyTables)){
-  table <- contingencyTables[[name]]
-  proportion_table <- divide_by_total_n(table)
-  proportion_tables[[name]] <- proportion_table
-  }
-  
-  #define weights matrix
-  weights_matrix <- matrix(c (1, 2/3, 1/3, 0,
-                         2/3, 1, 2/3, 1/3,
-                         1/3, 2/3, 1, 2/3,
-                         0, 1/3, 2/3, 1), nrow = 4, byrow = FALSE)
-  weighted_tables <- list()
-  
-  for (name in names(proportion_tables)) {
-  
-    table <- proportion_tables[[name]]
-  
-    weighted_table <- table * weights_matrix
-  
-    weighted_tables[[name]] <- weighted_table
-  }
-  
-  # Save the weigthed observed agreement in a list
-
-  w_oa_pairs <- data.frame(path_pair = character(0), weighted_observed_agreement = numeric(0))
-  
-  #Iterate through weighted tables
-
-  for (name in names(weighted_tables)) {
-  
-    table <- weighted_tables[[name]]
-  
-    sum_of_table <- sum(table)
-  
-  
-    w_oa_pairs <- rbind(w_oa_pairs, data.frame(path_pair = name, weighted_observed_agreement = sum_of_table))
-  }
-  summary_frame <- merge(summary_frame, w_oa_pairs, by = "path_pair") %>%
-  select(path_pair, total_n, observed_agreement, weighted_observed_agreement)
-  
-  averageForReference <- summary_frame %>%
-    summarise(observed_agreement = mean(observed_agreement),
-              weighted_observed_agreement = mean(weighted_observed_agreement))
-  
-  #Add observered agreement value to new dataframe
-  WSI_agreementBySlide[k, "observed_agreement"] <- averageForReference$observed_agreement
-  
-  WSI_agreementBySlide[k, "weighted_observed_agreement"] <- averageForReference$weighted_observed_agreement
-  
-}
-    
+ordered_pathologists <- pathologist_order$variable
 
 
-WSI_agreementBySlide$observed_agreement <- round(WSI_agreementBySlide$observed_agreement, 2)
+lp_lcPc$sum <- rowSums(lp_lcPc[, -1])
 
-WSI_agreementBySlide$weighted_observed_agreement <-
-  round(WSI_agreementBySlide$weighted_observed_agreement, 2)
+lp_lcPc <- lp_lcPc%>% arrange(desc(sum))
 
-#Save rds 
-saveRDS(WSI_agreementBySlide, paste0(outputDir_repro,"WSI_agreementBySlide.rds"))
-saveRDS(summary_frame, paste0(outputDir_repro,"WSI_agreementBySlide_PathPair.rds"))
+lp_lcPc_long <- pivot_longer(lp_lcPc, cols = starts_with("p"), names_to = "Pathologist", values_to = "Grade")
 
+lp_lcPc_long$slide_name <- factor(lp_lcPc_long$slide_name, levels = unique(lp_lcPc$slide_name))
 
 
-#Plot heatmap of observed agreement
-ie_lc <- WSI_agreementBySlide %>%
-  filter(class_label == "Intraepithelial lymphocytes")
+# Plot the tile map
+plot <- ggplot(lp_lcPc_long, aes(x = factor(Pathologist, levels = ordered_pathologists), y = slide_name, fill = factor(Grade))) +
+  geom_tile(color = "black") +
+  scale_fill_manual(values = lamina_propria_grade_palette, name = "Grade", labels = c("0" = "Normal", "1" = "Mild", "2" = "Moderate", "3" = "Marked")) +
+  theme_bw() +
+  theme(legend.position = "right", 
+        axis.text = element_text(size = 5, family = "Arial"),
+        axis.title = element_text(size = 9, family = "Arial"),
+         axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  labs(x = "Pathologist", y = "Slide")
 
-lp_lcPc <- WSI_agreementBySlide %>%
-  filter(class_label == "Lamina propria lymphocytes and plasmacells") 
+print(plot)
 
-renamed_lp <- lp_lcPc %>%
-  select(slide_name, observed_agreement, weighted_observed_agreement) %>%
-  rename(lamina_propria_unweighted = observed_agreement,
-         lamina_propria_weighted = weighted_observed_agreement)
-
-renamed_ie <- ie_lc%>%
-  select(slide_name, observed_agreement, weighted_observed_agreement) %>%
-  rename(intraepithelial_unweighted = observed_agreement,
-         intraepithelial_weighted = weighted_observed_agreement)
-
-observed_agreement <- left_join(renamed_ie, renamed_lp)
-
-  
-heatmap_data_agreement<- observed_agreement %>%
-  select(intraepithelial_unweighted, intraepithelial_weighted, lamina_propria_unweighted, lamina_propria_weighted)
-
-
-# Set row and column names
-colnames(heatmap_data_agreement) <- c("intraepithelia_unweighted", "intraepithelial_weighted",  "lamina_propria_unweighted", "lamina_propria_weighted")
-
-rownames(heatmap_data_agreement) <- observed_agreement$slide_name
-
-
-# Generate the heatmap
-heatmap_agreement <- pheatmap(heatmap_data_agreement, cluster_rows = TRUE, cluster_cols = TRUE,  fontsize = 7)
-
-print(heatmap_agreement)
-
-
+# Save the plot as a tif file
+output_file_tif <- paste0(supplementaryFigures_dir,"S9b_rawLpGrades.tif")
+tiff(output_file_tif, width = 3.54, height = 6.78, units = "in", res = 300)
+print(plot)
+dev.off()
 ```
+
 

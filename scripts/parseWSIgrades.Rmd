@@ -32,12 +32,9 @@ library(readxl)
 ### Set batch name and directories
 ```{r set batch name and directories}
 
-batch <- "Test_Scripts"
-top_dir <- "~/Documents/"
+batch <- "test_analysis"
 
-#batch <- "test_analysis"
-
-#top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwMacBook
+top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwMacBook
 #top_dir <- "C:/Users/jmwulcan/Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwDell
 #top_dir <- "C:/Users/15303/Box/Projects/paper/AIFeBx_supplemental/" #JMW lenovo
 
@@ -112,7 +109,7 @@ for (initial in graderInitials){
 
 #Quality checks
 
-#Checks if all dataframes adhere to the required structire (105 observations, contains the correct columns and only contains integers between 0 and 3 in numerical columns)
+#Checks if all dataframes adhere to the required structure (105 observations, contains the correct columns and only contains integers between 0 and 3 in numerical columns)
 
 #Check quality criteria for all dataframes in rawGrade
 checkedGrades <- vector("list", length = length(graderInitials))

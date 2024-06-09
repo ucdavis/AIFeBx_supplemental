@@ -1811,11 +1811,10 @@ Calculate summary statistics (median and interquartile range) for lymphocytes by
 
 #### Output
 - Stats table for "Lymphocytes by source" (used in **Table 1**) as excel  <tables/lymphocytes_bySource.xlsx>
-_ Summaries for individual annotations <output/lymphocyteValidation/all/individual_annotations_summaries.rds> 
-_ Summaries for candidate lymphocytes <output/lymphocyteValidation/all/candidateLc_summaries.rds> 
-_ Summaries for reference lymphocytes <output/lymphocyteValidation/all/referenceLc_summaries.rds> 
-_ Summaries for AI predictions <output/lymphocyteValidation/all/predictionAI_summaries.rds> 
 
+- **Supplementary figure 3** - Histograms for candidate lymphocytes, reference lymphocytes, AI-predictions and  individual annotations per validation region, per pathologist <figure/supplementary/S3_histogram_perROI.tif>
+
+- Combined summaries tables as rds <output/lymphocyteValidation/all/combined_summaries.rds> (used for ranking)
 
 ```{r summary stats lc by source}
 
@@ -1876,7 +1875,7 @@ summaryStats_individual_pathologist_annotations <- individual_annotations_summar
   ) 
 
 #Save rds 
-saveRDS(individual_annotations_summaries, paste0(outputDir_all, "individual_annotations_summaries.rds"))
+#saveRDS(individual_annotations_summaries, paste0(outputDir_all, "individual_annotations_summaries.rds"))
         
 #Create observation for table
 individual_pathologist_annotations <- data.frame(
@@ -1963,7 +1962,7 @@ summaryStats_candidateLc <- candidateLc_summaries %>%
   ) 
 
 #Save rds 
-saveRDS(candidateLc_summaries, paste0(outputDir_all, "candidateLc_summaries.rds"))
+#saveRDS(candidateLc_summaries, paste0(outputDir_all, "candidateLc_summaries.rds"))
 
 #Create observation for table
 candidate_lymphocyte_annotations <- data.frame(
@@ -2049,7 +2048,7 @@ summaryStats_referenceLc <- referenceLc_summaries  %>%
   ) 
 
 #Save rds 
-saveRDS(referenceLc_summaries, paste0(outputDir_all, "referenceLc_summaries.rds"))
+#saveRDS(referenceLc_summaries, paste0(outputDir_all, "referenceLc_summaries.rds"))
 
 #Create observation for table
 reference_lymphocyte_annotations <- data.frame(
@@ -2131,7 +2130,7 @@ summaryStats_predictionAI <- predictionAI_summaries %>%
   ) 
 
 #Save rds 
-saveRDS(predictionAI_summaries, paste0(outputDir_all, "predictionAI_summaries.rds"))
+#saveRDS(predictionAI_summaries, paste0(outputDir_all, "predictionAI_summaries.rds"))
 
 #Create observation for table
 predictionAI_annotations <- data.frame(
@@ -2183,34 +2182,18 @@ lymphocytes_bySource <- rbind(lymphocytes_bySource, predictionAI_annotations)
 saveRDS(lymphocytes_bySource, paste0(outputDir_all,"lymphocytes_bySource.rds"))
 #and excel
 write_xlsx(lymphocytes_bySource, paste0(tables_dir, "lymphocytes_bySource.xlsx"))
-```
 
-### Histograms for lymphocytes per ROI (quick)
-Plots histograms for candidate lymphocytes, reference lymphocyte, ai-generated lymphocyte predictions and individual annotations, per validation region 
 
-#### Input
--Summaries for individual annotations <output/lymphocyteValidation/all/individual_annotations_summaries.rds>
-_ Summaries for candidate lymphocytes <output/lymphocyteValidation/all/candidateLc_summaries.rds> 
-_ Summaries for reference lymphocytes <output/lymphocyteValidation/all/referenceLc_summaries.rds> 
-_ Summaries for AI predictions <output/lymphocyteValidation/all/predictionAI_summaries.rds> 
-
-#### Output
-- **Supplementary figure 3** - Histograms for candidate lymphocytes, reference lymphocytes, AI-predictions and  individual annotations per validation region, per pathologist <figure/supplementary/S3_histogram_perROI.tif>
-
-- Combined summaries tables as rds <output/lymphocyteValidation/all/combined_summaries.rds> 
-
-```{r}
-#Combine summmary sheets
-individual_annotations_summaries <- readRDS(paste0(outputDir_all, "individual_annotations_summaries.rds"))
-
-candidateLc_summaries <- readRDS(paste0(outputDir_all, "candidateLc_summaries.rds")) %>%
+### Histograms for lymphocytes per ROI 
+candidateLc_summaries <- candidateLc_summaries %>%
   mutate(pathologist = "Cand")
 
-referenceLc_summaries <- readRDS(paste0(outputDir_all, "referenceLc_summaries.rds")) %>%
+referenceLc_summaries <- referenceLc_summaries %>%
   mutate(pathologist = "Ref")
 
-predictionAI_summaries <- readRDS(paste0(outputDir_all, "predictionAI_summaries.rds")) %>%
+predictionAI_summaries <- predictionAI_summaries %>%
   mutate(pathologist = "AI")
+
 
 combined_summaries <- rbind(individual_annotations_summaries, candidateLc_summaries, referenceLc_summaries, predictionAI_summaries)
 

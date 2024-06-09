@@ -76,12 +76,9 @@ library(patchwork) # used to generate composite plots in fragmentDensity chunk
 
 ### Set batch name and directories
 ```{r set batch name and directories}
-batch <- "Test_Scripts"
-#batch <- "test_analysis"
+batch <- "test_analysis"
 
-
-top_dir <- "~/Documents/"
-#top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwMacBook
+top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwMacBook
 #top_dir <- "C:/Users/jmwulcan/Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwDell
 #top_dir <- "C:/Users/15303/Box/Projects/paper/AIFeBx_supplemental/" #JMW lenovo
 
@@ -177,7 +174,8 @@ nameSlide <- character(0)
 for (filePath in filePathsMucosa) {
   fileName <- basename(filePath)
   nameParts <- strsplit(fileName, "_")[[1]] #separate the elements of the  file path 
-  nameSlide <- nameParts[5] #use the 5th element as the slide name
+
+  nameSlide <- nameParts[6] #use the 5th element as the slide name
  
   if (!(nameSlide %in% slideNames)) {
     slideNames<- c(slideNames,nameSlide)
@@ -205,7 +203,7 @@ for (name in slideNames){
     for (filePath in filePathsMucosa) {
       fileName_mucosaAiforia <- basename(filePath)
       nameParts_mucosaAiforia <- strsplit(fileName_mucosaAiforia, "_")[[1]]
-      nameSlide_mucosaAiforia <- nameParts_mucosaAiforia[5]
+      nameSlide_mucosaAiforia <- nameParts_mucosaAiforia[6]
       
       rawMucosaCoords <- NULL
       
