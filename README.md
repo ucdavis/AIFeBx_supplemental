@@ -1,10 +1,9 @@
-# Supplemental data for "Artificial intelligence-based quantification of
-lymphocytes in feline small intestinal biopsies" 
-(for submission as full manuscript to Veterinary Pathology)
+# Supplemental data for "Artificial intelligence-based quantification of lymphocytes in feline small intestinal biopsies" 
+Wulcan, J. M., Giaretta, P. B., Fingerhood, S., de Brot, S., Crouch, E. E. V., Casanova, I., Ruivo, P. R., Bolfa, P., Streitenberger, N., Bertram, C. A., Donovan, T. A., Keel, M. K., Moore, P. F., & Keller, S. M. (2024). Artificial intelligence-based quantification of lymphocytes in feline small intestinal biopsies. Accepted for publication in Veterinary Pathology
 
 ## Objective
 This repository contains scripts for data analysis and manuscript preparation.
-Raw and intermediate data files is available via bioImageArchive (S-BIAD1129) 
+Raw and intermediate data files are available via bioImageArchive (S-BIAD1129) 
 
 ## Folder hierarchy
 All the scripts are adjusted to a folder hierarchy, created by the script 
@@ -24,7 +23,6 @@ It is recommended to download and organize the data into the intended folder tre
 structure (to avoid running computationally intense portions).
 
 ## Scripts
-
 - folderTree (sets up the folder hierarchy)
 - mergeModels (merges the output from the component mucosal compartment model 
 and the lymphocyte object detection model to generate intraepithelial and lamina
