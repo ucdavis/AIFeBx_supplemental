@@ -31,11 +31,11 @@ propria lymphocyte predictions)
 - wsi_assesment (parse WSI quality and origin data, **Figure 3**)
 - lymphocyteValidation (compares AI-generated lymphocyte predictions (output 
 from mergeModels with pathologists annotations and WSI quality 
-(from wsi_assessment), Figures 5-12, Supplemental figures S2-S10)
+(from wsi_assessment), **Figures 5-12**, **Supplemental figures S2-S10**)
 - parseWSIgrades (parses pathologists grades)
 - wsiReproducibility (analyse interobserver agreement between pathologists at 
-WSI level (Main Figure 13, Supplemental Figures S11-13))
+WSI level (**Figure 13**, **Supplemental Figures S11-13**))
 - wsiAI_vs_Path (compares AI-generated lymphocyte counts (from merge_models) 
-with pathologists grades (from parseWSIgrades), Figure 14))
+with pathologists grades (from parseWSIgrades), **Figure 14**))
 
 - randomizeAuthors (randomizes order of equally contributing coauthors)
