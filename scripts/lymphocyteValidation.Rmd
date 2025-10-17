@@ -912,7 +912,7 @@ Generate candidate lymphocytes through density based clustering (dbScan) using a
 - List of candidate lymphocytes for different distance thresholds </output/lymphocyteValidation/all/candidateLc_allTh.rds> 
 - Candidate lymphocyte center coordinates by threshold <output/lymphocyteValidation/bySlide/candidateLc/<threshold>/coordinates">
 - Candidate lymphocytes bounding boxes by threshold <output/lymphocyteValidation/bySlide/candidateLc/<threshold>/buffers"> 
-- Plots of candidate lymphocytes (bounding boxes), and overlaid individual pathologist annotations (centers) and AI muucosa and lymphocyte outline predictions by slide <output/lymphocyteValidation/bySlide/candidateLc/<threshold>/plots"
+- Plots of candidate lymphocytes (bounding boxes), and overlaid individual pathologist annotations (centers) and AI mucosa and lymphocyte outline predictions by slide <output/lymphocyteValidation/bySlide/candidateLc/<threshold>/plots"
 
 #### Deviation
 Did not set seed first time I ran this. Dbscan have random element. Got the same results rerunning though.
@@ -2272,10 +2272,10 @@ plot <- ggplot(combined_summaries_withRank, aes(x = pathologist, y = rank, fill 
 print(plot)
 
 # Save the plot as a tif file
-output_file_tif <- paste0(mainFigures_dir,"F6_pathologistRank.tif")
-tiff(output_file_tif, width = 7, height = 3.5, units = "in", res = 300)
-print(plot)
-dev.off()
+#output_file_tif <- paste0(mainFigures_dir,"F6_pathologistRank.tif")
+#tiff(output_file_tif, width = 7, height = 3.5, units = "in", res = 300)
+#print(plot)
+#dev.off()
 ```
 
 ### Confusion matrices (quick)

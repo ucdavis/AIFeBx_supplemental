@@ -206,11 +206,11 @@ names(lp_lcPc) <- gsub("_lamina_propria_lymphocytes_and_plasmacells", "", names(
 
   
 #Save rds 
-saveRDS(ie_lc, paste0(outputDir_parse,"WSI_grades_median_intraepithelial.rds"))
-saveRDS(lp_lcPc, paste0(outputDir_parse,"WSI_grades_median_laminaPropria.rds"))
+#saveRDS(ie_lc, paste0(outputDir_parse,"WSI_grades_median_intraepithelial.rds"))
+#saveRDS(lp_lcPc, paste0(outputDir_parse,"WSI_grades_median_laminaPropria.rds"))
 
 #Save rds 
-saveRDS(ie_lc, paste0(outputDir_parse,"intraEpithelial_lymphocytes.rds"))
-saveRDS(lp_lcPc, paste0(outputDir_parse,"laminaPropria_lymphocytesPlasmacells.rds"))
-saveRDS(observers, paste0(outputDir_parse,"observers.rds"))
+#saveRDS(ie_lc, paste0(outputDir_parse,"intraEpithelial_lymphocytes.rds"))
+#saveRDS(lp_lcPc, paste0(outputDir_parse,"laminaPropria_lymphocytesPlasmacells.rds"))
+#saveRDS(observers, paste0(outputDir_parse,"observers.rds"))
 ```

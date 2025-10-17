@@ -40,7 +40,7 @@ batch <- "test_analysis"
 
 top_dir <- "~/Library/CloudStorage/Box-Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwMacBook
 #top_dir <- "C:/Users/jmwulcan/Box/Projects/AI/paper/AIFeBx_supplemental/" #jmwDell
-#top_dir <- "C:/Users/15303/Box/Projects/paper/AIFeBx_supplemental/" #JMW lenovo
+#top_dir <- "C:/Users/15303/Box/Projects/AI/paper/AIFeBx_supplemental/" #JMW lenovo
 
 # Set input directory grading files
 inputDir <-paste0(top_dir, batch,"/output/wsiGrades_parsed/")
@@ -137,10 +137,10 @@ lp_upset_plot <- upset(upset_lp, keep.order = T, sets = c("Marked", "Moderate", 
 par(family = "Arial", cex = 0.9)
  print(lp_upset_plot)
 
-output_file_tif <- paste0(mainFigures_dir,"F11b_upsetLP.tif")
-tiff(output_file_tif, width = 3.54, height = 3.34, units = "in", res = 300)
-print(lp_upset_plot)
-dev.off()
+#output_file_tif <- paste0(mainFigures_dir,"F11b_upsetLP.tif")
+#tiff(output_file_tif, width = 3.54, height = 3.34, units = "in", res = 300)
+#print(lp_upset_plot)
+#dev.off()
 
 ```
 
